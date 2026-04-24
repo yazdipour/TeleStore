@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from email.utils import formatdate
 from html import escape
+from pathlib import Path
+from time import monotonic
 from urllib.parse import parse_qs
 from urllib.parse import unquote
 
@@ -9,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from src.assets import DEFAULT_ICON_PNG
 from src.settings import load_settings
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
@@ -16,6 +19,8 @@ from src.telegram_client import TelegramService
 
 settings = load_settings()
 telegram = TelegramService(settings)
+source_cache: dict[str, object] = {"expires_at": 0.0, "value": None}
+SOURCE_ICON_PATHS = (Path("/app/ShaFace.png"), Path("ShaFace.png"))
 
 
 def _html_page(body: str, status_code: int = 200) -> Response:
@@ -67,6 +72,16 @@ def _parse_range(value: str | None, size: int) -> tuple[int, int, bool]:
     return start, end, True
 
 
+def _image_media_type(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await telegram.start()
@@ -93,6 +108,60 @@ async def health():
         "authorized": await telegram.is_authorized(),
         "channel": settings.telegram_channel,
     }
+
+
+@app.api_route("/icon.png", methods=["GET", "HEAD"])
+async def icon_png(request: Request):
+    headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Length": str(len(DEFAULT_ICON_PNG)),
+    }
+    if request.method == "HEAD":
+        return Response(media_type="image/png", headers=headers)
+    return Response(
+        content=DEFAULT_ICON_PNG,
+        media_type="image/png",
+        headers=headers,
+    )
+
+
+@app.api_route("/source-icon.png", methods=["GET", "HEAD"])
+async def source_icon_png(request: Request):
+    icon_path = next((path for path in SOURCE_ICON_PATHS if path.exists()), None)
+    if icon_path is None:
+        return await icon_png(request)
+
+    icon = icon_path.read_bytes()
+    headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Length": str(len(icon)),
+    }
+    if request.method == "HEAD":
+        return Response(media_type="image/png", headers=headers)
+    return Response(content=icon, media_type="image/png", headers=headers)
+
+
+@app.api_route("/icon/{message_id}.jpg", methods=["GET", "HEAD"])
+async def telegram_icon(message_id: int, request: Request):
+    if not await telegram.is_authorized():
+        raise HTTPException(status_code=401, detail="Open /login to authenticate Telegram")
+    try:
+        message = await telegram.get_message(message_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    thumbnail = await telegram.download_thumbnail(message)
+    if not thumbnail:
+        thumbnail = DEFAULT_ICON_PNG
+    media_type = _image_media_type(thumbnail)
+
+    headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Length": str(len(thumbnail)),
+    }
+    if request.method == "HEAD":
+        return Response(media_type=media_type, headers=headers)
+    return Response(content=thumbnail, media_type=media_type, headers=headers)
 
 
 @app.get("/")
@@ -171,7 +240,15 @@ async def login_verify(request: Request):
 async def source_json():
     if not await telegram.is_authorized():
         raise HTTPException(status_code=401, detail="Open /login to authenticate Telegram")
-    return JSONResponse(await build_source(settings, telegram))
+    now = monotonic()
+    cached_source = source_cache["value"]
+    if cached_source is not None and now < float(source_cache["expires_at"]):
+        return JSONResponse(cached_source)
+
+    source = await build_source(settings, telegram)
+    source_cache["value"] = source
+    source_cache["expires_at"] = now + max(settings.source_cache_seconds, 0)
+    return JSONResponse(source)
 
 
 @app.api_route("/ipa/{message_id}/{filename:path}", methods=["GET", "HEAD"])

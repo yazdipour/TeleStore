@@ -27,6 +27,7 @@ class Settings:
     source_description: str
     source_icon_url: str
     source_tint_color: str
+    source_cache_seconds: int
     apps_config: str
     host: str
     port: int
@@ -48,6 +49,7 @@ def load_settings() -> Settings:
         ).strip(),
         source_icon_url=os.getenv("SOURCE_ICON_URL", "").strip(),
         source_tint_color=os.getenv("SOURCE_TINT_COLOR", "#1D9BF0").strip(),
+        source_cache_seconds=int(os.getenv("SOURCE_CACHE_SECONDS", "600")),
         apps_config=os.getenv("APPS_CONFIG", "").strip(),
         host=os.getenv("HOST", "0.0.0.0").strip(),
         port=int(os.getenv("PORT", "8080")),

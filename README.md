@@ -1,5 +1,7 @@
 # LiveBlatant
 
+<img src="./ShaFace.png" alt="ShaFace" height="270" />
+
 Self-hosted AltStore / SideStore / LiveContainer repository that streams IPA files from Blatants Telegram channel.
 
 No IPA files are stored in this repo. The local server reads Telegram with your own account session and streams files when the Store requests `downloadURL`.
@@ -21,6 +23,7 @@ TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_CHANNEL=blatants
 TELEGRAM_LIMIT=100
 BASE_URL=http://localhost:8080
+SOURCE_CACHE_SECONDS=600
 ```
 
 4. Choose how many recent channel posts to scan:
@@ -28,6 +31,8 @@ BASE_URL=http://localhost:8080
 ```env
 TELEGRAM_LIMIT=100
 ```
+
+`/source.json` is cached in memory for `SOURCE_CACHE_SECONDS` seconds. Increase `TELEGRAM_LIMIT` freely, then tune cache if refreshes feel slow.
 
 5. Start:
 
@@ -72,6 +77,9 @@ If caption parsing fails, increase `TELEGRAM_LIMIT` or improve the caption parse
 ## Routes
 
 - `GET /source.json` - AltStore source JSON.
+- `GET /source-icon.png` - repository icon from `ShaFace.png`.
+- `GET /icon.png` - default source/app icon.
+- `GET /icon/{message_id}.jpg` - Telegram thumbnail icon for an app.
 - `GET /ipa/{message_id}/{filename}` - streams Telegram file to AltStore.
 - `HEAD /ipa/{message_id}/{filename}` - returns file headers.
 - `GET /health` - basic health check.

@@ -58,6 +58,15 @@ class TelegramService:
             raise FileNotFoundError(f"Telegram message {message_id} has no media")
         return message
 
+    async def download_thumbnail(self, message: Message) -> bytes | None:
+        try:
+            data = await self.client.download_media(message, file=bytes, thumb=-1)
+        except Exception:
+            return None
+        if isinstance(data, bytes) and data:
+            return data
+        return None
+
     async def iter_recent_messages(self, limit: int) -> AsyncIterator[Message]:
         async for message in self.client.iter_messages(await self.channel(), limit=limit):
             if message and message.media:

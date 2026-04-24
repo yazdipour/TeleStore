@@ -60,6 +60,14 @@ def _app_download_url(settings: Settings, message_id: int, filename: str) -> str
     return f"{settings.base_url}/ipa/{message_id}/{quote(filename)}"
 
 
+def _icon_url(settings: Settings) -> str:
+    return settings.source_icon_url or f"{settings.base_url}/source-icon.png"
+
+
+def _message_icon_url(settings: Settings, message_id: int) -> str:
+    return f"{settings.base_url}/icon/{message_id}.jpg"
+
+
 def _message_date(message: Message) -> str:
     msg_date = message.date.astimezone(UTC) if message.date else datetime.now(UTC)
     return msg_date.isoformat().replace("+00:00", "Z")
@@ -125,6 +133,7 @@ def _app_from_message(settings: Settings, message_id: int, message: Message) -> 
         "developerName": "Blatants",
         "subtitle": modifier or "Telegram IPA",
         "localizedDescription": description,
+        "iconURL": _message_icon_url(settings, message_id),
         "tintColor": settings.source_tint_color,
         "versions": [version_entry],
     }
@@ -170,12 +179,10 @@ async def _manual_app(settings: Settings, telegram: TelegramService, raw_app: di
         "developerName": app.get("developerName", "Blatants"),
         "subtitle": app.get("subtitle") or app.get("modifier") or "Telegram IPA",
         "localizedDescription": description,
+        "iconURL": app.get("iconURL") or _message_icon_url(settings, message_id),
         "tintColor": app.get("tintColor", settings.source_tint_color),
         "versions": [version_entry],
     }
-    icon_url = app.get("iconURL") or settings.source_icon_url
-    if icon_url:
-        source_app["iconURL"] = icon_url
     return source_app
 
 
@@ -184,11 +191,10 @@ async def build_source(settings: Settings, telegram: TelegramService) -> dict:
         "name": settings.source_name,
         "subtitle": settings.source_subtitle,
         "description": settings.source_description,
+        "iconURL": _icon_url(settings),
         "tintColor": settings.source_tint_color,
         "apps": [],
     }
-    if settings.source_icon_url:
-        source["iconURL"] = settings.source_icon_url
 
     manual_apps = _load_manual_apps(settings.apps_config)
     manual_ids = {int(app["message_id"]) for app in manual_apps if app.get("message_id")}

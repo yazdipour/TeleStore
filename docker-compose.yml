@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - telegram-session:/data
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  telegram-session:

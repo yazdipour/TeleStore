@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SOURCE_ICON_URL = "https://github.com/yazdipour/LiveBlatant/blob/master/ShaFace.png"
+SOURCE_ICON_URL = "https://raw.githubusercontent.com/yazdipour/LiveBlatant/refs/heads/master/ShaFace.png"
 SOURCE_TINT_COLOR = "#1D9BF0"
 
 

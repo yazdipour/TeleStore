@@ -6,6 +6,11 @@ Self-hosted AltStore / SideStore / LiveContainer repository that streams IPA fil
 
 No IPA files are stored in this repo. The local server reads Telegram with your own account session and streams files when the Store requests `downloadURL`.
 
+## Screenshot of the repo in SideStore and LiveContainer:
+
+![SideStore screenshot](./docs/scrn2.png)
+![LiveContainer screenshot](./docs/scrn.png)
+
 ## Setup
 
 1. Create Telegram API credentials at https://my.telegram.org/apps.

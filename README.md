@@ -22,7 +22,8 @@ No IPA files are stored in this repo. The local server reads Telegram with your 
 TELEGRAM_CHANNEL=blatants
 TELEGRAM_API_ID=123456
 TELEGRAM_API_HASH=your_api_hash
-BASE_URL=http://localhost:8080
+BASE_URL=http://localhost
+PORT=8080
 TELEGRAM_LIMIT=100 # How many recent channel posts to scan
 SOURCE_CACHE_SECONDS=600 # Cache source.json for 10 minutes
 ```
@@ -34,7 +35,7 @@ services:
   app:
     image: ghcr.io/yazdipour/liveblatant:latest
     ports:
-      - "${PORT:-8080}:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     env_file:
       - path: .env
     volumes:
@@ -54,7 +55,7 @@ docker compose up -d
 First run starts even without a Telegram session. Open this URL and log in:
 
 ```text
-http://localhost:8080/login
+http://localhost:${PORT:-8080}/login
 ```
 
 The session is saved in the `telegram-session` Docker volume, so later `docker compose up` runs skip login.
@@ -64,10 +65,10 @@ This builds from local `Dockerfile` instead of pulling GHCR image.
 
 ### IPA Repo URL
 
-On the same computer: `$BASE_URL/source.json`
+On the same computer, with the default port: `http://localhost:${PORT:-8080}/source.json`
 
-On an iPhone on the same Wi-Fi, set BASE_URL to your computer LAN IP so the repository is reachable from the phone. For example, if your computer LAN IP is `192.168.1.50`:
- `http://192.168.1.50:8080/source.json`.
+On an iPhone on the same Wi-Fi, set BASE_URL to your computer LAN IP without the port. The app adds `PORT` automatically. For example, if your computer LAN IP is `192.168.1.50` and `PORT=8080`:
+ `http://192.168.1.50:${PORT:-8080}/source.json`.
 
 ## Developer Setup
 

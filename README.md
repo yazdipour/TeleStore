@@ -78,6 +78,10 @@ cp .env.example .env
 docker compose -f docker-compose.local.yml up --build
 ```
 
+## AI Acknowledgment
+
+This project was built with the assistance of AI tools for code generation and refactoring.
+
 ## License MIT License. 
 
 See [LICENSE](./LICENSE) for details.

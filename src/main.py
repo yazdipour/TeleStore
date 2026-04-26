@@ -4,6 +4,7 @@ from html import escape
 from pathlib import Path
 from time import monotonic
 from urllib.parse import parse_qs
+from urllib.parse import quote
 from urllib.parse import unquote
 
 import uvicorn
@@ -58,18 +59,33 @@ def _parse_range(value: str | None, size: int) -> tuple[int, int, bool]:
         raise HTTPException(status_code=400, detail="Invalid Range header")
     spec = value.removeprefix("bytes=").split(",", 1)[0].strip()
     start_s, _, end_s = spec.partition("-")
-    if start_s:
-        start = int(start_s)
-        end = int(end_s) if end_s else size - 1
-    else:
-        suffix = int(end_s)
-        if suffix <= 0:
-            raise HTTPException(status_code=416, detail="Invalid Range header")
-        start = max(size - suffix, 0)
-        end = size - 1
+    try:
+        if start_s:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
+        else:
+            suffix = int(end_s)
+            if suffix <= 0:
+                raise HTTPException(status_code=416, detail="Invalid Range header")
+            start = max(size - suffix, 0)
+            end = size - 1
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid Range header") from exc
     if start < 0 or end >= size or start > end:
         raise HTTPException(status_code=416, detail="Range not satisfiable")
     return start, end, True
+
+
+def _content_disposition(filename: str) -> str:
+    fallback = "".join(
+        char
+        if char.isascii() and char not in {'"', "\\", "\r", "\n"} and ord(char) >= 32
+        else "_"
+        for char in filename
+    ).strip()
+    if not fallback:
+        fallback = "app.ipa"
+    return f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{quote(filename, safe="")}'
 
 
 def _image_media_type(data: bytes) -> str:
@@ -272,7 +288,7 @@ async def ipa(message_id: int, filename: str, request: Request):
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(content_length),
-        "Content-Disposition": f'attachment; filename="{safe_filename}"',
+        "Content-Disposition": _content_disposition(safe_filename),
         "Cache-Control": "no-store",
         "Last-Modified": formatdate(message.date.timestamp(), usegmt=True),
     }

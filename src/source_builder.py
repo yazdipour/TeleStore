@@ -77,13 +77,16 @@ def _message_size(message: Message) -> int:
     return int(getattr(getattr(message, "file", None), "size", None) or 0)
 
 
-def _version_sort_key(app: dict) -> tuple[tuple[int | str, ...], str]:
+def _version_sort_key(app: dict) -> tuple[tuple[tuple[int, int | str], ...], str]:
     version = app["versions"][0]
-    parsed: list[int | str] = []
-    for part in re.split(r"[._\-\s]+", str(version.get("version", ""))):
+    parsed: list[tuple[int, int | str]] = []
+    for part in re.findall(
+        r"\d+|[A-Za-z]+|[^A-Za-z\d._\-\s]+",
+        str(version.get("version", "")),
+    ):
         if not part:
             continue
-        parsed.append(int(part) if part.isdigit() else part.lower())
+        parsed.append((1, int(part)) if part.isdigit() else (0, part.lower()))
     return tuple(parsed), str(version.get("date", ""))
 
 
@@ -158,7 +161,11 @@ async def _manual_app(settings: Settings, telegram: TelegramService, raw_app: di
     bundle_id = app.get("bundleIdentifier") or _parse_field(text, "bundleIdentifier")
     version = app.get("version") or _parse_field(text, "version") or "1.0"
     min_os = app.get("minOSVersion") or _parse_field(text, "minOSVersion")
-    description = app.get("localizedDescription") or _caption_description(text)
+    description = (
+        app.get("localizedDescription")
+        or _caption_description(text)
+        or f"Install from Telegram post {message_id}."
+    )
     if not bundle_id:
         bundle_id = f"telegram.blatants.{message_id}"
 

@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/yazdipour/liveblatant:${LIVEBLATANT_IMAGE_TAG:-latest}
+    build: .
     ports:
       - "${PORT:-8080}:8080"
     env_file:

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from email.utils import formatdate
 from html import escape
+import logging
 from pathlib import Path
 from time import monotonic
 from urllib.parse import parse_qs
@@ -22,6 +23,7 @@ settings = load_settings()
 telegram = TelegramService(settings)
 source_cache: dict[str, object] = {"expires_at": 0.0, "value": None}
 SOURCE_ICON_PATHS = (Path("/app/ShaFace.png"), Path("ShaFace.png"))
+logger = logging.getLogger("uvicorn.error")
 
 
 def _html_page(body: str, status_code: int = 200) -> Response:
@@ -101,6 +103,8 @@ def _image_media_type(data: bytes) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await telegram.start()
+    if await telegram.is_authorized():
+        logger.info("Service ready. Repo link: %s", f"{settings.base_url}/source.json")
     try:
         yield
     finally:

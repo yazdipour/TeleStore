@@ -1,45 +1,62 @@
 # LiveBlatant
 
-<img src="./ShaFace.png" alt="ShaFace" height="270" />
+<img src="./imgs/ShaFace.png" alt="ShaFace" height="270" />
 
-Self-hosted AltStore / SideStore / LiveContainer repository that streams IPA files from Blatants Telegram channel.
+Self-hosted AltStore / SideStore / LiveContainer repository that streams IPA files from Telegram channels.
 
 No IPA files are stored in this repo. The local server reads Telegram with your own account session and streams files.
 
 ## Screenshot of the repo in SideStore and LiveContainer:
 
-![SideStore screenshot](./docs/scrn2.png)
-![LiveContainer screenshot](./docs/scrn.png)
+![SideStore screenshot](./imgs/scrn2.png)
+![LiveContainer screenshot](./imgs/scrn.png)
 
 ## Quick Setup
 
 1. Create Telegram API credentials at https://my.telegram.org/apps.
-2. Create `.env`: `cp .env.example .env`
+2. Create `config.yml`: `cp config.example.yml config.yml`
 
-3. Edit `.env` and set:
+3. Edit `config.yml` and set:
 
-```env
-TELEGRAM_CHANNEL=blatants
-TELEGRAM_API_ID=123456
-TELEGRAM_API_HASH=your_api_hash
-BASE_URL=http://localhost
-PORT=8080
-TELEGRAM_LIMIT=100 # How many recent channel posts to scan
-SOURCE_CACHE_SECONDS=600 # Cache source.json for 10 minutes
+```yaml
+telegram:
+  api_id: 123456
+  api_hash: your_api_hash
+  session: /data/telegram.session
+  limit: 100
+
+server:
+  base_url: http://localhost:8080
+
+source:
+  subtitle: Telegram-backed IPA source
+  description: Self-hosted AltStore source that streams IPA files from Telegram.
+  tint_color: "#1D9BF0"
+  cache_seconds: 600
+
+channels:
+  - channel: blatants
+    name: LiveBlatant
+    slug: liveblatant
+    tint_color: "#1D9BF0"
+
+  - channel: dvntms
+    name: DVNTMS
+    slug: dvntms
+    tint_color: "#8B5CF6"
 ```
 
-1. Create `docker-compose.yml`:
+4. Create `docker-compose.yml`:
 
 ```yaml
 services:
   app:
     image: ghcr.io/yazdipour/liveblatant:latest
     ports:
-      - "${PORT:-8080}:${PORT:-8080}"
-    env_file:
-      - path: .env
+      - "8080:8080" # if port 8080 is in use, change to another port, for example "9090:8080", and set server.base_url to http://localhost:9090
     volumes:
       - telegram-session:/data
+      - ./config.yml:/app/config.yml:ro
     restart: unless-stopped
 volumes:
   telegram-session:
@@ -55,7 +72,7 @@ docker compose up -d
 First run starts even without a Telegram session. Open this URL and log in:
 
 ```text
-http://localhost:${PORT:-8080}/login
+http://localhost:8080/login
 ```
 
 The session is saved in the `telegram-session` Docker volume, so later `docker compose up` runs skip login.
@@ -63,19 +80,66 @@ The session is saved in the `telegram-session` Docker volume, so later `docker c
 
 This builds from local `Dockerfile` instead of pulling GHCR image.
 
-### IPA Repo URL
+### IPA Repo URLs
 
-On the same computer, with the default port: `http://localhost:${PORT:-8080}/source.json`
+Each configured channel gets its own source JSON, named from the source slug:
 
-On an iPhone on the same Wi-Fi, set BASE_URL to your computer LAN IP without the port. The app adds `PORT` automatically. For example, if your computer LAN IP is `192.168.1.50` and `PORT=8080`:
- `http://192.168.1.50:${PORT:-8080}/source.json`.
+```text
+http://localhost:8080/liveblatant.json
+http://localhost:8080/dvntms.json
+```
+
+The legacy first-source URL still works: `http://localhost:8080/source.json`
+
+On an iPhone on the same Wi-Fi, set `server.base_url` to the reachable URL. For example, if your computer LAN IP is `192.168.1.50` and Docker maps host port `8080`:
+ `http://192.168.1.50:8080/liveblatant.json`.
+
+### Multiple Channels
+
+Use the `channels` array in `config.yml` to configure multiple channels:
+
+```yaml
+channels:
+  - channel: blatants
+    name: LiveBlatant
+    slug: liveblatant
+    tint_color: "#1D9BF0"
+
+  - channel: dvntms
+    name: DVNTMS
+    slug: dvntms
+    tint_color: "#8B5CF6"
+```
+
+The app creates one repository per channel. By default, each repo is served at `/{source-name-slug}.json`, for example `/liveblatant.json`.
+
+Optional per-source overrides live on the channel entry:
+
+```yaml
+channels:
+  - channel: blatants
+    name: LiveBlatant
+    slug: liveblatant
+    subtitle: Telegram-backed IPA source
+    description: Self-hosted source for the Blatants channel.
+    tint_color: "#1D9BF0"
+    apps_config: /data/liveblatant-apps.yml
+
+  - channel: dvntms
+    name: DVNTMS
+    slug: dvntms
+    tint_color: "#8B5CF6"
+    apps_config: /data/another-apps.yml
+```
+
+To change the host port, edit `docker-compose.yml`, for example `9090:8080`, and set `server.base_url` to `http://localhost:9090` or your LAN URL.
 
 ## Developer Setup
 
 Use local build when changing source:
 
 ```bash
-cp .env.example .env
+cp config.example.yml config.yml
 docker compose -f docker-compose.local.yml up --build
 ```
 

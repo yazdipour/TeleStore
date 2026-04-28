@@ -3,10 +3,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-import yaml
 from telethon.tl.types import Message
 
-from src.settings import Settings
+from src.settings import Settings, SourceConfig
 from src.telegram_client import TelegramService
 
 
@@ -16,19 +15,6 @@ FIELD_PATTERNS = {
     "minOSVersion": re.compile(r"minimum\s*ios\s*:\s*([^\s]+)", re.I),
     "modifier": re.compile(r"modifier\s*:\s*(.+)", re.I),
 }
-
-
-def _load_manual_apps(path: str) -> list[dict]:
-    if not path:
-        return []
-    config_path = Path(path)
-    if not config_path.exists():
-        return []
-    data = yaml.safe_load(config_path.read_text()) or {}
-    apps = data.get("apps", [])
-    if not isinstance(apps, list):
-        raise ValueError("manual app config must contain an apps list")
-    return [dict(app) for app in apps]
 
 
 def _message_text(message: Message) -> str:
@@ -56,16 +42,22 @@ def _parse_field(text: str, field: str) -> str | None:
     return match.group(1).strip(" .")
 
 
-def _app_download_url(settings: Settings, message_id: int, filename: str) -> str:
-    return f"{settings.base_url}/ipa/{message_id}/{quote(filename)}"
+def _app_download_url(settings: Settings, source: SourceConfig, message_id: int, filename: str) -> str:
+    return f"{settings.base_url}/ipa/{source.slug}/{message_id}/{quote(filename)}"
 
 
 def _icon_url(settings: Settings) -> str:
     return settings.source_icon_url or f"{settings.base_url}/source-icon.png"
 
 
-def _message_icon_url(settings: Settings, message_id: int) -> str:
-    return f"{settings.base_url}/icon/{message_id}.jpg"
+def _source_icon_url(settings: Settings, source: SourceConfig) -> str:
+    if source.icon:
+        return f"{settings.base_url}/{source.slug}-icon.png"
+    return _icon_url(settings)
+
+
+def _message_icon_url(settings: Settings, source: SourceConfig, message_id: int) -> str:
+    return f"{settings.base_url}/icon/{source.slug}/{message_id}.jpg"
 
 
 def _message_date(message: Message) -> str:
@@ -109,11 +101,11 @@ def _caption_description(text: str) -> str:
     return "\n".join(lines)
 
 
-def _app_from_message(settings: Settings, message_id: int, message: Message) -> dict:
+def _app_from_message(settings: Settings, source: SourceConfig, message_id: int, message: Message) -> dict:
     text = _message_text(message)
     filename = _message_filename(message, f"{message_id}.ipa")
     name = _clean_name(filename)
-    bundle_id = _parse_field(text, "bundleIdentifier") or f"telegram.blatants.{message_id}"
+    bundle_id = _parse_field(text, "bundleIdentifier") or f"telegram.{source.slug}.{message_id}"
     version = _parse_field(text, "version") or "1.0"
     min_os = _parse_field(text, "minOSVersion")
     modifier = _parse_field(text, "modifier")
@@ -123,7 +115,7 @@ def _app_from_message(settings: Settings, message_id: int, message: Message) -> 
         "version": version,
         "buildVersion": version,
         "date": _message_date(message),
-        "downloadURL": _app_download_url(settings, message_id, filename),
+        "downloadURL": _app_download_url(settings, source, message_id, filename),
         "localizedDescription": description,
         "size": _message_size(message),
     }
@@ -133,11 +125,11 @@ def _app_from_message(settings: Settings, message_id: int, message: Message) -> 
     return {
         "name": name,
         "bundleIdentifier": bundle_id,
-        "developerName": "Blatants",
+        "developerName": source.name,
         "subtitle": modifier or "Telegram IPA",
         "localizedDescription": description,
-        "iconURL": _message_icon_url(settings, message_id),
-        "tintColor": settings.source_tint_color,
+        "iconURL": _message_icon_url(settings, source, message_id),
+        "tintColor": source.tint_color,
         "versions": [version_entry],
     }
 
@@ -150,72 +142,22 @@ def _is_ipa_message(message: Message) -> bool:
     return "bundle id:" in text and "updated to:" in text
 
 
-async def _manual_app(settings: Settings, telegram: TelegramService, raw_app: dict) -> dict:
-    app = dict(raw_app)
-    message_id = int(app["message_id"])
-    message = await telegram.get_message(message_id)
-    filename = app.get("filename") or _message_filename(message, f"{message_id}.ipa")
-    text = _message_text(message)
-
-    name = app.get("name") or _clean_name(filename)
-    bundle_id = app.get("bundleIdentifier") or _parse_field(text, "bundleIdentifier")
-    version = app.get("version") or _parse_field(text, "version") or "1.0"
-    min_os = app.get("minOSVersion") or _parse_field(text, "minOSVersion")
-    description = (
-        app.get("localizedDescription")
-        or _caption_description(text)
-        or f"Install from Telegram post {message_id}."
-    )
-    if not bundle_id:
-        bundle_id = f"telegram.blatants.{message_id}"
-
-    version_entry = {
-        "version": str(version),
-        "buildVersion": str(app.get("buildVersion") or version),
-        "date": str(app.get("date") or _message_date(message)),
-        "downloadURL": _app_download_url(settings, message_id, filename),
-        "localizedDescription": description,
-        "size": int(app.get("size") or _message_size(message)),
-    }
-    if min_os:
-        version_entry["minOSVersion"] = str(min_os)
-
-    source_app = {
-        "name": name,
-        "bundleIdentifier": bundle_id,
-        "developerName": app.get("developerName", "Blatants"),
-        "subtitle": app.get("subtitle") or app.get("modifier") or "Telegram IPA",
-        "localizedDescription": description,
-        "iconURL": app.get("iconURL") or _message_icon_url(settings, message_id),
-        "tintColor": app.get("tintColor", settings.source_tint_color),
-        "versions": [version_entry],
-    }
-    return source_app
-
-
-async def build_source(settings: Settings, telegram: TelegramService) -> dict:
+async def build_source(settings: Settings, source_config: SourceConfig, telegram: TelegramService) -> dict:
     source: dict = {
-        "name": settings.source_name,
-        "subtitle": settings.source_subtitle,
-        "description": settings.source_description,
-        "iconURL": _icon_url(settings),
-        "tintColor": settings.source_tint_color,
+        "name": source_config.name,
+        "subtitle": source_config.subtitle,
+        "description": source_config.description,
+        "iconURL": _source_icon_url(settings, source_config),
+        "tintColor": source_config.tint_color,
         "apps": [],
     }
 
-    manual_apps = _load_manual_apps(settings.apps_config)
-    manual_ids = {int(app["message_id"]) for app in manual_apps if app.get("message_id")}
-
-    for app in manual_apps:
-        if app.get("message_id"):
-            source["apps"].append(await _manual_app(settings, telegram, app))
-
-    async for message in telegram.iter_recent_messages(settings.telegram_limit):
-        if not message.id or message.id in manual_ids:
+    async for message in telegram.iter_recent_messages(source_config, settings.telegram_limit):
+        if not message.id:
             continue
         if not _is_ipa_message(message):
             continue
-        source["apps"].append(_app_from_message(settings, int(message.id), message))
+        source["apps"].append(_app_from_message(settings, source_config, int(message.id), message))
 
     source["apps"] = _dedupe_latest(source["apps"])
     return source

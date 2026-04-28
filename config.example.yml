@@ -1,0 +1,29 @@
+telegram:
+  api_id: 123456
+  api_hash: your_api_hash
+  session: /data/telegram.session
+  limit: 300
+
+server:
+  base_url: http://localhost:8080
+  host: 0.0.0.0
+
+source:
+  name: TeleStore
+  subtitle: Telegram-backed IPA source
+  description: Self-hosted AltStore source that streams IPA files from Telegram.
+  tint_color: "#1D9BF0"
+  cache_seconds: 2000
+
+channels:
+  - channel: blatants
+    name: Blatants
+    slug: blatants
+    tint_color: "#1D9BF0"
+    icon: imgs/ICON-120-blue.png
+
+  - channel: dvntms
+    name: DVNTMS
+    slug: dvntms
+    tint_color: "#8B5CF6"
+    icon: imgs/ICON-120-green.png

@@ -1,6 +1,6 @@
-# LiveBlatant
+# TeleStore
 
-<img src="./imgs/ShaFace.png" alt="ShaFace" height="270" />
+<img src="./imgs/ShaFace.png" alt="TeleStore icon" height="270" />
 
 Self-hosted AltStore / SideStore / LiveContainer repository that streams IPA files from Telegram channels.
 
@@ -29,6 +29,7 @@ server:
   base_url: http://localhost:8080
 
 source:
+  name: TeleStore
   subtitle: Telegram-backed IPA source
   description: Self-hosted AltStore source that streams IPA files from Telegram.
   tint_color: "#1D9BF0"
@@ -36,14 +37,16 @@ source:
 
 channels:
   - channel: blatants
-    name: LiveBlatant
-    slug: liveblatant
+    name: Blatants
+    slug: blatants
     tint_color: "#1D9BF0"
+    icon: imgs/ICON-120-blue.png
 
   - channel: dvntms
     name: DVNTMS
     slug: dvntms
     tint_color: "#8B5CF6"
+    icon: imgs/ICON-120-green.png
 ```
 
 4. Create `docker-compose.yml`:
@@ -51,7 +54,8 @@ channels:
 ```yaml
 services:
   app:
-    image: ghcr.io/yazdipour/liveblatant:latest
+    image: ghcr.io/yazdipour/telestore:latest
+    build: .
     ports:
       - "8080:8080" # if port 8080 is in use, change to another port, for example "9090:8080", and set server.base_url to http://localhost:9090
     volumes:
@@ -85,14 +89,14 @@ This builds from local `Dockerfile` instead of pulling GHCR image.
 Each configured channel gets its own source JSON, named from the source slug:
 
 ```text
-http://localhost:8080/liveblatant.json
+http://localhost:8080/blatants.json
 http://localhost:8080/dvntms.json
 ```
 
 The legacy first-source URL still works: `http://localhost:8080/source.json`
 
 On an iPhone on the same Wi-Fi, set `server.base_url` to the reachable URL. For example, if your computer LAN IP is `192.168.1.50` and Docker maps host port `8080`:
- `http://192.168.1.50:8080/liveblatant.json`.
+ `http://192.168.1.50:8080/blatants.json`.
 
 ### Multiple Channels
 
@@ -101,36 +105,40 @@ Use the `channels` array in `config.yml` to configure multiple channels:
 ```yaml
 channels:
   - channel: blatants
-    name: LiveBlatant
-    slug: liveblatant
+    name: Blatants
+    slug: blatants
     tint_color: "#1D9BF0"
+    icon: imgs/ICON-120-blue.png
 
   - channel: dvntms
     name: DVNTMS
     slug: dvntms
     tint_color: "#8B5CF6"
+    icon: imgs/ICON-120-green.png
 ```
 
-The app creates one repository per channel. By default, each repo is served at `/{source-name-slug}.json`, for example `/liveblatant.json`.
+The app creates one repository per channel. By default, each repo is served at `/{source-name-slug}.json`, for example `/blatants.json`.
 
-Optional per-source overrides live on the channel entry:
+Optional per-source display overrides live on the channel entry:
 
 ```yaml
 channels:
   - channel: blatants
-    name: LiveBlatant
-    slug: liveblatant
+    name: Blatants
+    slug: blatants
     subtitle: Telegram-backed IPA source
     description: Self-hosted source for the Blatants channel.
     tint_color: "#1D9BF0"
-    apps_config: /data/liveblatant-apps.yml
+    icon: imgs/ICON-120-blue.png
 
   - channel: dvntms
     name: DVNTMS
     slug: dvntms
     tint_color: "#8B5CF6"
-    apps_config: /data/another-apps.yml
+    icon: imgs/ICON-120-green.png
 ```
+
+The `icon` path is optional. If omitted, the source uses the default `/source-icon.png`.
 
 To change the host port, edit `docker-compose.yml`, for example `9090:8080`, and set `server.base_url` to `http://localhost:9090` or your LAN URL.
 

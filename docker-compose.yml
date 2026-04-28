@@ -1,13 +1,14 @@
+name: telestore
+
 services:
   app:
-    image: ghcr.io/yazdipour/liveblatant:${LIVEBLATANT_IMAGE_TAG:-latest}
+    image: ghcr.io/yazdipour/telestore:${TELESTORE_IMAGE_TAG:-latest}
+    build: .
     ports:
-      - "${PORT:-8080}:${PORT:-8080}"
-    env_file:
-      - path: .env
-        required: false
+      - "8080:8080"
     volumes:
       - telegram-session:/data
+      - ./config.yml:/app/config.yml:ro
     restart: unless-stopped
 
 volumes:

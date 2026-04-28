@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from email.utils import formatdate
 from html import escape
+import json
 import logging
 from pathlib import Path
 from time import monotonic
@@ -14,15 +15,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.assets import DEFAULT_ICON_PNG
-from src.settings import load_settings
+from src.settings import APP_PORT, load_settings
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
 
 
 settings = load_settings()
 telegram = TelegramService(settings)
-source_cache: dict[str, object] = {"expires_at": 0.0, "value": None}
-SOURCE_ICON_PATHS = (Path("/app/ShaFace.png"), Path("ShaFace.png"))
+source_caches: dict[str, dict[str, object]] = {
+    source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources
+}
+sources_by_slug = {source.slug: source for source in settings.sources}
+default_source = settings.sources[0]
+SOURCE_ICON_PATHS = (
+    Path("/app/imgs/ICON-120-blue.png"),
+    Path("imgs/ICON-120-blue.png"),
+)
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -38,9 +46,31 @@ def _html_page(body: str, status_code: int = 200) -> Response:
     body {{ font-family: system-ui, sans-serif; max-width: 520px; margin: 48px auto; padding: 0 20px; line-height: 1.5; }}
     input, button {{ font: inherit; width: 100%; box-sizing: border-box; padding: 10px 12px; margin: 6px 0 14px; }}
     button {{ cursor: pointer; }}
-    code {{ background: #eee; padding: 2px 4px; }}
+    code {{ background: #eee; padding: 2px 4px; overflow-wrap: anywhere; }}
+    ul {{ padding-left: 0; list-style: none; }}
+    li {{ margin: 0 0 18px; }}
+    .source-name {{ font-weight: 650; }}
+    .source-url {{ display: block; margin: 6px 0 8px; }}
+    .copy-button {{ width: auto; min-width: 92px; margin: 0; padding: 8px 10px; }}
     .error {{ color: #b00020; }}
   </style>
+  <script>
+    async function copySourceUrl(button, url) {{
+      try {{
+        await navigator.clipboard.writeText(url);
+        button.textContent = "Copied";
+      }} catch (error) {{
+        const input = document.createElement("input");
+        input.value = url;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+        button.textContent = "Copied";
+      }}
+      setTimeout(() => button.textContent = "Copy", 1400);
+    }}
+  </script>
 </head>
 <body>{body}</body>
 </html>""",
@@ -100,18 +130,62 @@ def _image_media_type(data: bytes) -> str:
     return "application/octet-stream"
 
 
+def _configured_icon_path(icon: str) -> Path | None:
+    if not icon:
+        return None
+    path = Path(icon)
+    candidates = [path] if path.is_absolute() else [Path("/app") / path, path]
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def _icon_response(icon: bytes, request: Request) -> Response:
+    media_type = _image_media_type(icon)
+    headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Length": str(len(icon)),
+    }
+    if request.method == "HEAD":
+        return Response(media_type=media_type, headers=headers)
+    return Response(content=icon, media_type=media_type, headers=headers)
+
+
+def _source_url(source) -> str:
+    return f"{settings.base_url}/{source.slug}.json"
+
+
+def _source_links(include_channel: bool = False) -> str:
+    rows = []
+    for source in settings.sources:
+        url = _source_url(source)
+        channel = f" / @{escape(source.channel)}" if include_channel else ""
+        rows.append(
+            "<li>"
+            f'<div class="source-name">{escape(source.name)}{channel}</div>'
+            f'<a class="source-url" href="{escape(url)}"><code>{escape(url)}</code></a>'
+            f'<button class="copy-button" type="button" onclick="copySourceUrl(this, {escape(json.dumps(url))})">'
+            "Copy</button>"
+            "</li>"
+        )
+    return f"<ul>{''.join(rows)}</ul>"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await telegram.start()
     if await telegram.is_authorized():
-        logger.info("Service ready. Repo link: %s", f"{settings.base_url}/source.json")
+        for source in settings.sources:
+            logger.info(
+                "Service ready. %s repo link: %s",
+                source.name,
+                f"{settings.base_url}/{source.slug}.json",
+            )
     try:
         yield
     finally:
         await telegram.stop()
 
 
-app = FastAPI(title="LiveBlatant", lifespan=lifespan)
+app = FastAPI(title="TeleStore", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -126,7 +200,15 @@ async def health():
     return {
         "ok": True,
         "authorized": await telegram.is_authorized(),
-        "channel": settings.telegram_channel,
+        "sources": [
+            {
+                "channel": source.channel,
+                "name": source.name,
+                "slug": source.slug,
+                "url": _source_url(source),
+            }
+            for source in settings.sources
+        ],
     }
 
 
@@ -151,22 +233,32 @@ async def source_icon_png(request: Request):
     if icon_path is None:
         return await icon_png(request)
 
-    icon = icon_path.read_bytes()
-    headers = {
-        "Cache-Control": "public, max-age=86400",
-        "Content-Length": str(len(icon)),
-    }
-    if request.method == "HEAD":
-        return Response(media_type="image/png", headers=headers)
-    return Response(content=icon, media_type="image/png", headers=headers)
+    return _icon_response(icon_path.read_bytes(), request)
 
 
-@app.api_route("/icon/{message_id}.jpg", methods=["GET", "HEAD"])
-async def telegram_icon(message_id: int, request: Request):
+def _source_or_404(source_slug: str):
+    source = sources_by_slug.get(source_slug)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Unknown source: {source_slug}")
+    return source
+
+
+@app.api_route("/{source_slug}-icon.png", methods=["GET", "HEAD"])
+async def configured_source_icon(source_slug: str, request: Request):
+    source = _source_or_404(source_slug)
+    icon_path = _configured_icon_path(source.icon)
+    if icon_path is None:
+        return await source_icon_png(request)
+    return _icon_response(icon_path.read_bytes(), request)
+
+
+@app.api_route("/icon/{source_slug}/{message_id:int}.jpg", methods=["GET", "HEAD"])
+async def telegram_icon(source_slug: str, message_id: int, request: Request):
     if not await telegram.is_authorized():
         raise HTTPException(status_code=401, detail="Open /login to authenticate Telegram")
+    source = _source_or_404(source_slug)
     try:
-        message = await telegram.get_message(message_id)
+        message = await telegram.get_message(source, message_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -184,13 +276,18 @@ async def telegram_icon(message_id: int, request: Request):
     return Response(content=thumbnail, media_type=media_type, headers=headers)
 
 
+@app.api_route("/icon/{message_id:int}.jpg", methods=["GET", "HEAD"])
+async def legacy_telegram_icon(message_id: int, request: Request):
+    return await telegram_icon(default_source.slug, message_id, request)
+
+
 @app.get("/")
 async def home():
     if await telegram.is_authorized():
         return _html_page(
-            f"<h1>{escape(settings.source_name)}</h1>"
+            "<h1>Telegram Sources</h1>"
             '<p>Telegram login ready.</p>'
-            '<p>AltStore source: <a href="/source.json"><code>/source.json</code></a></p>'
+            f"{_source_links(include_channel=True)}"
         )
     return _html_page(
         '<h1>Telegram Login Required</h1>'
@@ -203,7 +300,7 @@ async def login_page():
     if await telegram.is_authorized():
         return _html_page(
             '<h1>Logged In</h1><p>Telegram session saved.</p>'
-            '<p>AltStore source: <a href="/source.json"><code>/source.json</code></a></p>'
+            f"{_source_links()}"
         )
     return _html_page(
         """<h1>Telegram Login</h1>
@@ -252,31 +349,39 @@ async def login_verify(request: Request):
         )
     return _html_page(
         '<h1>Login Saved</h1><p>Telegram session saved in Docker volume.</p>'
-        '<p>AltStore source: <a href="/source.json"><code>/source.json</code></a></p>'
+        f"{_source_links()}"
     )
 
 
 @app.get("/source.json")
 async def source_json():
+    return await named_source_json(default_source.slug)
+
+
+@app.get("/{source_slug}.json")
+async def named_source_json(source_slug: str):
     if not await telegram.is_authorized():
         raise HTTPException(status_code=401, detail="Open /login to authenticate Telegram")
+    source_config = _source_or_404(source_slug)
     now = monotonic()
+    source_cache = source_caches[source_config.slug]
     cached_source = source_cache["value"]
     if cached_source is not None and now < float(source_cache["expires_at"]):
         return JSONResponse(cached_source)
 
-    source = await build_source(settings, telegram)
+    source = await build_source(settings, source_config, telegram)
     source_cache["value"] = source
     source_cache["expires_at"] = now + max(settings.source_cache_seconds, 0)
     return JSONResponse(source)
 
 
-@app.api_route("/ipa/{message_id}/{filename:path}", methods=["GET", "HEAD"])
-async def ipa(message_id: int, filename: str, request: Request):
+@app.api_route("/ipa/{source_slug}/{message_id:int}/{filename:path}", methods=["GET", "HEAD"])
+async def ipa(source_slug: str, message_id: int, filename: str, request: Request):
     if not await telegram.is_authorized():
         raise HTTPException(status_code=401, detail="Open /login to authenticate Telegram")
+    source = _source_or_404(source_slug)
     try:
-        message = await telegram.get_message(message_id)
+        message = await telegram.get_message(source, message_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -314,5 +419,10 @@ async def ipa(message_id: int, filename: str, request: Request):
     )
 
 
+@app.api_route("/ipa/{message_id:int}/{filename:path}", methods=["GET", "HEAD"])
+async def legacy_ipa(message_id: int, filename: str, request: Request):
+    return await ipa(default_source.slug, message_id, filename, request)
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    uvicorn.run(app, host=settings.host, port=APP_PORT)

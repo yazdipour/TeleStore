@@ -5,7 +5,7 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import Message
 
-from src.settings import Settings
+from src.settings import Settings, SourceConfig
 
 
 class TelegramService:
@@ -16,7 +16,7 @@ class TelegramService:
             settings.telegram_api_id,
             settings.telegram_api_hash,
         )
-        self._channel_entity = None
+        self._channel_entities = {}
         self._pending_phone: str | None = None
 
     async def start(self) -> None:
@@ -47,13 +47,13 @@ class TelegramService:
             await self.client.sign_in(password=password)
         self._pending_phone = None
 
-    async def channel(self):
-        if self._channel_entity is None:
-            self._channel_entity = await self.client.get_entity(self.settings.telegram_channel)
-        return self._channel_entity
+    async def channel(self, source: SourceConfig):
+        if source.slug not in self._channel_entities:
+            self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
+        return self._channel_entities[source.slug]
 
-    async def get_message(self, message_id: int) -> Message:
-        message = await self.client.get_messages(await self.channel(), ids=message_id)
+    async def get_message(self, source: SourceConfig, message_id: int) -> Message:
+        message = await self.client.get_messages(await self.channel(source), ids=message_id)
         if not message or not message.media:
             raise FileNotFoundError(f"Telegram message {message_id} has no media")
         return message
@@ -67,8 +67,8 @@ class TelegramService:
             return data
         return None
 
-    async def iter_recent_messages(self, limit: int) -> AsyncIterator[Message]:
-        async for message in self.client.iter_messages(await self.channel(), limit=limit):
+    async def iter_recent_messages(self, source: SourceConfig, limit: int) -> AsyncIterator[Message]:
+        async for message in self.client.iter_messages(await self.channel(source), limit=limit):
             if message and message.media:
                 yield message
 

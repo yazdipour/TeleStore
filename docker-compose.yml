@@ -1,9 +1,6 @@
-name: telestore
-
 services:
   app:
     image: ghcr.io/yazdipour/telestore:${TELESTORE_IMAGE_TAG:-latest}
-    build: .
     ports:
       - "8080:8080"
     volumes:

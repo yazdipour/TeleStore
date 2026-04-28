@@ -55,7 +55,6 @@ channels:
 services:
   app:
     image: ghcr.io/yazdipour/telestore:latest
-    build: .
     ports:
       - "8080:8080" # if port 8080 is in use, change to another port, for example "9090:8080", and set server.base_url to http://localhost:9090
     volumes:
@@ -80,9 +79,6 @@ http://localhost:8080/login
 ```
 
 The session is saved in the `telegram-session` Docker volume, so later `docker compose up` runs skip login.
-
-
-This builds from local `Dockerfile` instead of pulling GHCR image.
 
 ### IPA Repo URLs
 

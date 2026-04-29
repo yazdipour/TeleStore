@@ -31,6 +31,10 @@ telegram:
 server:
   base_url: http://localhost:8080
   ui_config: false
+  ipa_cache_dir: /data/ipa-cache
+  ipa_cache_workers: 4
+  ipa_cache_global_workers: 8
+  ipa_cache_part_size: 8388608
 
 source:
   name: TeleStore
@@ -70,17 +74,13 @@ volumes:
 ```
 
 
-5. Start:
+5. Start the server:
 
 ```bash
 docker compose up -d
 ```
 
-First run starts even without a Telegram session. Open this URL and log in:
-
-```text
-http://localhost:8080/login
-```
+First run starts even without a Telegram session. Open this URL and log in: `http://localhost:8080/login`
 
 The session is saved in the `telegram-session` Docker volume, so later `docker compose up` runs skip login.
 
@@ -97,6 +97,20 @@ The legacy first-source URL still works: `http://localhost:8080/source.json`
 
 On an iPhone on the same Wi-Fi, set `server.base_url` to the reachable URL. For example, if your computer LAN IP is `192.168.1.50` and Docker maps host port `8080`:
  `http://192.168.1.50:8080/blatants.json`.
+
+## Configuration
+
+### Download Cache
+
+```yaml
+server:
+  ipa_cache_dir: /data/ipa-cache
+  ipa_cache_workers: 4
+  ipa_cache_global_workers: 8
+  ipa_cache_part_size: 8388608
+```
+
+IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files.
 
 ### Multiple Channels
 

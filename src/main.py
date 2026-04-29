@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 from copy import deepcopy
 from email.utils import formatdate
 from html import escape
@@ -28,6 +29,9 @@ telegram = TelegramService(settings)
 source_caches: dict[str, dict[str, object]] = {
     source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources
 }
+ipa_cache_locks: dict[str, asyncio.Lock] = {}
+ipa_cache_lock_refs: dict[str, int] = {}
+ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
 sources_by_slug = {source.slug: source for source in settings.sources}
 default_source = settings.sources[0]
 SOURCE_ICON_PATHS = (
@@ -96,7 +100,7 @@ async def _form(request: Request) -> dict[str, str]:
 
 
 def _runtime_refresh() -> None:
-    global settings, source_caches, sources_by_slug, default_source
+    global settings, source_caches, sources_by_slug, default_source, ipa_cache_global_semaphore
     settings_module.reload_config()
     settings = load_settings()
     telegram.settings = settings
@@ -104,6 +108,7 @@ def _runtime_refresh() -> None:
     source_caches = {source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources}
     sources_by_slug = {source.slug: source for source in settings.sources}
     default_source = settings.sources[0]
+    ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
 
 
 def _config_ui_enabled() -> None:
@@ -224,6 +229,205 @@ def _parse_range(value: str | None, size: int) -> tuple[int, int, bool]:
     if start < 0 or end >= size or start > end:
         raise HTTPException(status_code=416, detail="Range not satisfiable")
     return start, end, True
+
+
+def _file_chunks(path: Path, start: int, content_length: int, chunk_size: int = 1024 * 1024):
+    remaining = content_length
+    with path.open("rb") as handle:
+        handle.seek(start)
+        while remaining > 0:
+            chunk = handle.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def _cache_key(source_slug: str, message_id: int, filename: str) -> str:
+    safe_name = sub(r"[^A-Za-z0-9._-]+", "-", filename).strip("-") or "app.ipa"
+    return f"{source_slug}/{message_id}-{safe_name[:180]}"
+
+
+def _ipa_cache_path(source_slug: str, message_id: int, filename: str) -> Path | None:
+    if not settings.ipa_cache_dir:
+        return None
+    return Path(settings.ipa_cache_dir) / _cache_key(source_slug, message_id, filename)
+
+
+def _valid_cached_file(path: Path | None, expected_size: int) -> bool:
+    if path is None:
+        return False
+    try:
+        return path.stat().st_size == expected_size
+    except OSError:
+        return False
+
+
+def _cached_ipa_response(
+    path: Path,
+    *,
+    start: int,
+    content_length: int,
+    partial: bool,
+    headers: dict[str, str],
+) -> StreamingResponse:
+    return StreamingResponse(
+        _file_chunks(path, start, content_length),
+        status_code=206 if partial else 200,
+        media_type="application/octet-stream",
+        headers=headers,
+    )
+
+
+@asynccontextmanager
+async def _cache_lock(path: Path):
+    key = str(path)
+    lock = ipa_cache_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        ipa_cache_locks[key] = lock
+    ipa_cache_lock_refs[key] = ipa_cache_lock_refs.get(key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        refs = ipa_cache_lock_refs.get(key, 1) - 1
+        if refs <= 0:
+            ipa_cache_lock_refs.pop(key, None)
+            ipa_cache_locks.pop(key, None)
+        else:
+            ipa_cache_lock_refs[key] = refs
+
+
+def _cache_ranges(expected_size: int) -> list[tuple[int, int]]:
+    part_size = settings.ipa_cache_part_size
+    return [
+        (offset, min(part_size, expected_size - offset))
+        for offset in range(0, expected_size, part_size)
+    ]
+
+
+async def _download_cache_range(message, temp_path: Path, offset: int, length: int) -> None:
+    position = offset
+    with temp_path.open("r+b") as handle:
+        async with ipa_cache_global_semaphore:
+            async for chunk in telegram.stream_media(message, offset=offset, limit=length):
+                handle.seek(position)
+                handle.write(chunk)
+                position += len(chunk)
+
+    if position - offset != length:
+        raise RuntimeError(
+            f"Telegram media cache part incomplete: offset {offset}, {position - offset}/{length} bytes"
+        )
+
+
+async def _download_cache_parallel(message, temp_path: Path, expected_size: int) -> None:
+    ranges = _cache_ranges(expected_size)
+    workers = min(settings.ipa_cache_workers, len(ranges))
+    queue = asyncio.Queue()
+    for item in ranges:
+        queue.put_nowait(item)
+
+    async def worker() -> None:
+        while True:
+            try:
+                offset, length = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await _download_cache_range(message, temp_path, offset, length)
+            finally:
+                queue.task_done()
+
+    with temp_path.open("wb") as handle:
+        handle.truncate(expected_size)
+
+    tasks = [asyncio.create_task(worker()) for _ in range(workers)]
+    try:
+        await asyncio.gather(*tasks)
+    except Exception:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+async def _download_cache_serial(message, temp_path: Path, expected_size: int) -> None:
+    written = 0
+    with temp_path.open("wb") as handle:
+        async with ipa_cache_global_semaphore:
+            async for chunk in telegram.stream_media(message, offset=0, limit=expected_size):
+                handle.write(chunk)
+                written += len(chunk)
+    if written != expected_size:
+        raise RuntimeError(f"Telegram media cache incomplete: {written}/{expected_size} bytes")
+
+
+async def _download_cache_file(message, temp_path: Path, expected_size: int) -> None:
+    if settings.ipa_cache_workers <= 1 or expected_size <= settings.ipa_cache_part_size:
+        await _download_cache_serial(message, temp_path, expected_size)
+        return
+    await _download_cache_parallel(message, temp_path, expected_size)
+
+
+async def _ensure_ipa_cached(message, cache_path: Path, expected_size: int) -> None:
+    async with _cache_lock(cache_path):
+        if _valid_cached_file(cache_path, expected_size):
+            return
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = cache_path.with_name(f".{cache_path.name}.tmp")
+        try:
+            await _download_cache_file(message, temp_path, expected_size)
+            temp_path.replace(cache_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+
+
+async def _stream_ipa_with_cache(message, cache_path: Path, expected_size: int):
+    async with _cache_lock(cache_path):
+        if _valid_cached_file(cache_path, expected_size):
+            for chunk in _file_chunks(cache_path, 0, expected_size):
+                yield chunk
+            return
+
+        handle = None
+        temp_path = cache_path.with_name(f".{cache_path.name}.tmp")
+        written = 0
+        cache_failed = False
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = temp_path.open("wb")
+        except Exception as exc:
+            cache_failed = True
+            logger.warning("IPA cache write unavailable, streaming without cache: %s", exc)
+
+        try:
+            async with ipa_cache_global_semaphore:
+                async for chunk in telegram.stream_media(message, offset=0, limit=expected_size):
+                    if handle is not None:
+                        try:
+                            handle.write(chunk)
+                        except Exception as exc:
+                            cache_failed = True
+                            logger.warning("IPA cache write failed, streaming without cache: %s", exc)
+                            handle.close()
+                            handle = None
+                            temp_path.unlink(missing_ok=True)
+                        else:
+                            written += len(chunk)
+                    yield chunk
+        finally:
+            if handle is not None:
+                handle.close()
+
+        if not cache_failed:
+            if written == expected_size:
+                temp_path.replace(cache_path)
+            else:
+                temp_path.unlink(missing_ok=True)
 
 
 def _content_disposition(filename: str) -> str:
@@ -583,6 +787,37 @@ async def ipa(source_slug: str, message_id: int, filename: str, request: Request
             media_type="application/octet-stream",
             headers=headers,
         )
+
+    cache_path = _ipa_cache_path(source.slug, message_id, safe_filename)
+    if _valid_cached_file(cache_path, size):
+        return _cached_ipa_response(
+            cache_path,
+            start=start,
+            content_length=content_length,
+            partial=partial,
+            headers=headers,
+        )
+
+    if cache_path is not None:
+        try:
+            if partial:
+                await _ensure_ipa_cached(message, cache_path, size)
+                return _cached_ipa_response(
+                    cache_path,
+                    start=start,
+                    content_length=content_length,
+                    partial=partial,
+                    headers=headers,
+                )
+
+            return StreamingResponse(
+                _stream_ipa_with_cache(message, cache_path, size),
+                status_code=200,
+                media_type="application/octet-stream",
+                headers=headers,
+            )
+        except Exception as exc:
+            logger.warning("IPA cache unavailable, streaming from Telegram: %s", exc)
 
     return StreamingResponse(
         telegram.stream_media(message, offset=start, limit=content_length),

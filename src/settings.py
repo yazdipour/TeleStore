@@ -100,6 +100,10 @@ class Settings:
     source_cache_seconds: int
     host: str
     ui_config: bool
+    ipa_cache_dir: str
+    ipa_cache_workers: int
+    ipa_cache_global_workers: int
+    ipa_cache_part_size: int
 
 
 def _slug(value: str) -> str:
@@ -186,4 +190,8 @@ def load_settings() -> Settings:
         source_cache_seconds=int(_setting("source.cache_seconds", "600")),
         host=str(_setting("server.host", "0.0.0.0")).strip(),
         ui_config=_bool_setting("server.ui_config", False),
+        ipa_cache_dir=str(_setting("server.ipa_cache_dir", "/data/ipa-cache")).strip(),
+        ipa_cache_workers=max(int(_setting("server.ipa_cache_workers", "4")), 1),
+        ipa_cache_global_workers=max(int(_setting("server.ipa_cache_global_workers", "8")), 1),
+        ipa_cache_part_size=max(int(_setting("server.ipa_cache_part_size", str(8 * 1024 * 1024))), 512 * 1024),
     )

@@ -8,6 +8,10 @@ server:
   base_url: http://localhost:8080
   host: 0.0.0.0
   ui_config: false
+  ipa_cache_dir: /data/ipa-cache
+  ipa_cache_workers: 4
+  ipa_cache_global_workers: 8
+  ipa_cache_part_size: 8388608
 
 source:
   name: TeleStore

@@ -114,47 +114,18 @@ IPA downloads are cached under `server.ipa_cache_dir` after the first request. R
 
 ### Multiple Channels
 
-Use the `channels` array in `config.yml` to configure multiple channels:
+Define multiple Telegram channels in `config.yml`. App generates one JSON repository per channel, served at `/{slug}.json` (e.g., `/blatants.json`).
 
 ```yaml
 channels:
   - channel: blatants
     name: Blatants
     slug: blatants
+    subtitle: Custom subtitle # Optional override
+    description: Custom description # Optional override
     tint_color: "#1D9BF0"
-    icon: imgs/ICON-120-blue.png
-
-  - channel: dvntms
-    name: DVNTMS
-    slug: dvntms
-    tint_color: "#8B5CF6"
-    icon: imgs/ICON-120-green.png
+    icon: imgs/ICON-120-blue.png # Optional, defaults to /source-icon.png
 ```
-
-The app creates one repository per channel. By default, each repo is served at `/{source-name-slug}.json`, for example `/blatants.json`.
-
-Optional per-source display overrides live on the channel entry:
-
-```yaml
-channels:
-  - channel: blatants
-    name: Blatants
-    slug: blatants
-    subtitle: Telegram-backed IPA source
-    description: Self-hosted source for the Blatants channel.
-    tint_color: "#1D9BF0"
-    icon: imgs/ICON-120-blue.png
-
-  - channel: dvntms
-    name: DVNTMS
-    slug: dvntms
-    tint_color: "#8B5CF6"
-    icon: imgs/ICON-120-green.png
-```
-
-The `icon` path is optional. If omitted, the source uses the default `/source-icon.png`.
-
-To change the host port, edit `docker-compose.yml`, for example `9090:8080`, and set `server.base_url` to `http://localhost:9090` or your LAN URL.
 
 ### Optional Config UI
 
@@ -182,6 +153,6 @@ docker compose -f docker-compose.local.yml up --build
 
 This project was built with the assistance of AI tools for code generation and refactoring.
 
-## License MIT License. 
+## License
 
-See [LICENSE](./LICENSE) for details.
+MIT License. See [LICENSE](./LICENSE) for details.

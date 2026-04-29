@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from email.utils import formatdate
 from html import escape
 import json
 import logging
 from pathlib import Path
+from re import sub
 from time import monotonic
 from urllib.parse import parse_qs
 from urllib.parse import quote
@@ -12,9 +14,10 @@ from urllib.parse import unquote
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
 from src.assets import DEFAULT_ICON_PNG
+from src import settings as settings_module
 from src.settings import APP_PORT, load_settings
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
@@ -31,6 +34,8 @@ SOURCE_ICON_PATHS = (
     Path("/app/imgs/ICON-120-blue.png"),
     Path("imgs/ICON-120-blue.png"),
 )
+DEFAULT_SOURCE_TINT_COLOR = "#1D9BF0"
+DEFAULT_SOURCE_ICON = "imgs/ICON-120-blue.png"
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -41,18 +46,24 @@ def _html_page(body: str, status_code: int = 200) -> Response:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Telegram Login</title>
+  <title>TeleStore</title>
   <style>
     body {{ font-family: system-ui, sans-serif; max-width: 520px; margin: 48px auto; padding: 0 20px; line-height: 1.5; }}
     input, button {{ font: inherit; width: 100%; box-sizing: border-box; padding: 10px 12px; margin: 6px 0 14px; }}
     button {{ cursor: pointer; }}
     code {{ background: #eee; padding: 2px 4px; overflow-wrap: anywhere; }}
+    form {{ margin: 0; }}
+    label {{ display: block; font-weight: 600; margin-top: 8px; }}
     ul {{ padding-left: 0; list-style: none; }}
     li {{ margin: 0 0 18px; }}
     .source-name {{ font-weight: 650; }}
     .source-url {{ display: block; margin: 6px 0 8px; }}
-    .copy-button {{ width: auto; min-width: 92px; margin: 0; padding: 8px 10px; }}
+    .source-actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+    .copy-button, .remove-button {{ width: auto; min-width: 92px; margin: 0; padding: 8px 10px; }}
+    .remove-button {{ color: #b00020; }}
     .error {{ color: #b00020; }}
+    .config-card {{ border: 1px solid #ddd; padding: 14px; margin: 14px 0; }}
+    .muted {{ color: #666; }}
   </style>
   <script>
     async function copySourceUrl(button, url) {{
@@ -82,6 +93,113 @@ def _html_page(body: str, status_code: int = 200) -> Response:
 async def _form(request: Request) -> dict[str, str]:
     body = (await request.body()).decode()
     return {key: values[-1] for key, values in parse_qs(body).items()}
+
+
+def _runtime_refresh() -> None:
+    global settings, source_caches, sources_by_slug, default_source
+    settings_module.reload_config()
+    settings = load_settings()
+    telegram.settings = settings
+    telegram._channel_entities.clear()
+    source_caches = {source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources}
+    sources_by_slug = {source.slug: source for source in settings.sources}
+    default_source = settings.sources[0]
+
+
+def _config_ui_enabled() -> None:
+    if not settings.ui_config:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _source_config_rows() -> list[tuple[int, object]]:
+    channels = settings_module.CONFIG.get("channels")
+    if not isinstance(channels, list):
+        return []
+
+    rows = []
+    source_index = 0
+    for config_index, raw_source in enumerate(channels):
+        raw_channel = raw_source.get("channel", "") if isinstance(raw_source, dict) else raw_source
+        if not str(raw_channel).strip().lstrip("@"):
+            continue
+        if source_index >= len(settings.sources):
+            break
+        rows.append((config_index, settings.sources[source_index]))
+        source_index += 1
+    return rows
+
+
+def _config_page_body(error: str = "") -> str:
+    status = ""
+    if error:
+        status = f'<p class="error">{escape(error)}</p>'
+
+    rows = []
+    for config_index, source in _source_config_rows():
+        url = _source_url(source)
+        rows.append(
+            '<li class="config-card">'
+            f'<div class="source-name">{escape(source.name)} / @{escape(source.channel)}</div>'
+            f'<a class="source-url" href="{escape(url)}"><code>{escape(url)}</code></a>'
+            '<div class="source-actions">'
+            f'<button class="copy-button" type="button" onclick="copySourceUrl(this, {escape(json.dumps(url))})">'
+            "Copy URL</button>"
+            '<form method="post" action="/config/channels/remove">'
+            f'<input type="hidden" name="index" value="{config_index}">'
+            '<button class="remove-button" type="submit">Remove</button>'
+            "</form>"
+            "</div>"
+            "</li>"
+        )
+
+    return (
+        "<h1>Channel Config</h1>"
+        '<p><a href="/">Sources</a></p>'
+        f"{status}"
+        f"<ul>{''.join(rows)}</ul>"
+        '<h2>Add Channel</h2>'
+        '<form method="post" action="/config/channels">'
+        "<label>Telegram channel name, without @</label>"
+        '<input name="channel" placeholder="blatants" required>'
+        "<label>Tint color</label>"
+        f'<input name="tint_color" value="{DEFAULT_SOURCE_TINT_COLOR}" required>'
+        "<label>Icon path</label>"
+        f'<input name="icon" value="{DEFAULT_SOURCE_ICON}" required>'
+        '<button type="submit">Add Channel</button>'
+        "</form>"
+        f'<p class="muted">Changes are saved to <code>{escape(str(settings_module.config_path()))}</code>.</p>'
+    )
+
+
+def _slug(value: str) -> str:
+    slug = sub(r"[^A-Za-z0-9_-]+", "-", value.strip()).strip("-").lower()
+    return slug or "source"
+
+
+def _channel_entry(data: dict[str, str]) -> dict[str, str]:
+    channel = data.get("channel", "").strip().lstrip("@")
+    if not channel:
+        raise ValueError("Channel is required.")
+
+    telegram_name = channel.split("/")[-1].strip() or channel
+    return {
+        "channel": channel,
+        "name": telegram_name,
+        "slug": _slug(telegram_name),
+        "tint_color": data.get("tint_color", "").strip() or DEFAULT_SOURCE_TINT_COLOR,
+        "icon": data.get("icon", "").strip() or DEFAULT_SOURCE_ICON,
+    }
+
+
+def _save_channels(channels: list) -> None:
+    next_config = deepcopy(settings_module.CONFIG)
+    next_config["channels"] = channels
+    settings_module.save_config(next_config)
+    _runtime_refresh()
+
+
+def _config_redirect() -> RedirectResponse:
+    return RedirectResponse("/config", status_code=303)
 
 
 def _parse_range(value: str | None, size: int) -> tuple[int, int, bool]:
@@ -189,7 +307,7 @@ app = FastAPI(title="TeleStore", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "HEAD", "OPTIONS"],
+    allow_methods=["GET", "HEAD", "POST", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["Content-Length", "Content-Range", "Content-Disposition"],
 )
@@ -284,9 +402,11 @@ async def legacy_telegram_icon(message_id: int, request: Request):
 @app.get("/")
 async def home():
     if await telegram.is_authorized():
+        config_link = '<p><a href="/config">Edit channels</a></p>' if settings.ui_config else ""
         return _html_page(
             "<h1>Telegram Sources</h1>"
             '<p>Telegram login ready.</p>'
+            f"{config_link}"
             f"{_source_links(include_channel=True)}"
         )
     return _html_page(
@@ -298,8 +418,10 @@ async def home():
 @app.get("/login")
 async def login_page():
     if await telegram.is_authorized():
+        config_link = '<p><a href="/config">Edit channels</a></p>' if settings.ui_config else ""
         return _html_page(
             '<h1>Logged In</h1><p>Telegram session saved.</p>'
+            f"{config_link}"
             f"{_source_links()}"
         )
     return _html_page(
@@ -351,6 +473,57 @@ async def login_verify(request: Request):
         '<h1>Login Saved</h1><p>Telegram session saved in Docker volume.</p>'
         f"{_source_links()}"
     )
+
+
+@app.get("/config")
+async def config_page():
+    _config_ui_enabled()
+    return _html_page(_config_page_body())
+
+
+@app.post("/config/channels")
+async def config_add_channel(request: Request):
+    _config_ui_enabled()
+    data = await _form(request)
+    try:
+        entry = _channel_entry(data)
+        channels = settings_module.CONFIG.get("channels")
+        if not isinstance(channels, list):
+            channels = []
+        else:
+            channels = list(channels)
+        channels.append(entry)
+        _save_channels(channels)
+    except Exception as exc:
+        return _html_page(_config_page_body(error=str(exc)), 400)
+
+    return _config_redirect()
+
+
+@app.post("/config/channels/remove")
+async def config_remove_channel(request: Request):
+    _config_ui_enabled()
+    data = await _form(request)
+    try:
+        index = int(data.get("index", ""))
+        channels = settings_module.CONFIG.get("channels")
+        if not isinstance(channels, list):
+            raise ValueError("channels must be a YAML list.")
+        configured_channels = [
+            item
+            for item in channels
+            if str(item.get("channel", item) if isinstance(item, dict) else item).strip().lstrip("@")
+        ]
+        if len(configured_channels) <= 1:
+            raise ValueError("At least one channel must remain configured.")
+        removed = channels[index]
+        next_channels = list(channels)
+        del next_channels[index]
+        _save_channels(next_channels)
+    except Exception as exc:
+        return _html_page(_config_page_body(error=str(exc)), 400)
+
+    return _config_redirect()
 
 
 @app.get("/source.json")

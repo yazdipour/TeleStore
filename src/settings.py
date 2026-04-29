@@ -12,18 +12,35 @@ SOURCE_TINT_COLOR = "#1D9BF0"
 APP_PORT = 8080
 
 
-def _load_config() -> dict[str, Any]:
-    config_path = Path(os.getenv("CONFIG_FILE", "config.yml")).expanduser()
-    if not config_path.exists():
-        raise RuntimeError(f"Missing configuration file: {config_path}")
+def config_path() -> Path:
+    return Path(os.getenv("CONFIG_FILE", "config.yml")).expanduser()
 
-    data = yaml.safe_load(config_path.read_text()) or {}
+
+def _load_config() -> dict[str, Any]:
+    path = config_path()
+    if not path.exists():
+        raise RuntimeError(f"Missing configuration file: {path}")
+
+    data = yaml.safe_load(path.read_text()) or {}
     if not isinstance(data, dict):
-        raise RuntimeError(f"Configuration file must contain a YAML object: {config_path}")
+        raise RuntimeError(f"Configuration file must contain a YAML object: {path}")
     return data
 
 
 CONFIG = _load_config()
+
+
+def reload_config() -> dict[str, Any]:
+    global CONFIG
+    CONFIG = _load_config()
+    return CONFIG
+
+
+def save_config(data: dict[str, Any]) -> None:
+    global CONFIG
+    path = config_path()
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    CONFIG = data
 
 
 def _get_config(path: str) -> Any:
@@ -45,6 +62,15 @@ def _required(path: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required setting: {path}")
     return value
+
+
+def _bool_setting(path: str, default: bool = False) -> bool:
+    value = _setting(path, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _base_url(base_url: str) -> str:
@@ -73,6 +99,7 @@ class Settings:
     source_icon_url: str
     source_cache_seconds: int
     host: str
+    ui_config: bool
 
 
 def _slug(value: str) -> str:
@@ -158,4 +185,5 @@ def load_settings() -> Settings:
         source_icon_url=str(_setting("source.icon_url", SOURCE_ICON_URL)).strip(),
         source_cache_seconds=int(_setting("source.cache_seconds", "600")),
         host=str(_setting("server.host", "0.0.0.0")).strip(),
+        ui_config=_bool_setting("server.ui_config", False),
     )

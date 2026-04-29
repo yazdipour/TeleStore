@@ -5,7 +5,7 @@ services:
       - "8080:8080"
     volumes:
       - telegram-session:/data
-      - ./config.yml:/app/config.yml:ro
+      - ./config.yml:/app/config.yml
     restart: unless-stopped
 
 volumes:

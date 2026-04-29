@@ -30,6 +30,7 @@ telegram:
 
 server:
   base_url: http://localhost:8080
+  ui_config: false
 
 source:
   name: TeleStore
@@ -62,7 +63,7 @@ services:
       - "8080:8080" # if port 8080 is in use, change to another port, for example "9090:8080", and set server.base_url to http://localhost:9090
     volumes:
       - telegram-session:/data
-      - ./config.yml:/app/config.yml:ro
+      - ./config.yml:/app/config.yml
     restart: unless-stopped
 volumes:
   telegram-session:
@@ -140,6 +141,19 @@ channels:
 The `icon` path is optional. If omitted, the source uses the default `/source-icon.png`.
 
 To change the host port, edit `docker-compose.yml`, for example `9090:8080`, and set `server.base_url` to `http://localhost:9090` or your LAN URL.
+
+### Optional Config UI
+
+The channel editor is disabled by default. To enable it, set:
+
+```yaml
+server:
+  ui_config: true
+```
+
+Then open `http://localhost:8080/config` to add or remove channels and copy each channel source URL. New channels use the Telegram handle as the display name, a slugified lowercase handle for the URL, `#1D9BF0` as the tint color, and `imgs/ICON-120-blue.png` as the icon.
+
+![Config UI screenshot](./imgs/config.jpg)
 
 ## Developer Setup
 

@@ -6,6 +6,9 @@ Self-hosted AltStore / SideStore / LiveContainer repository that streams IPA fil
 
 No IPA files are stored in this repo. The local server reads Telegram with your own account session and streams files.
 
+> [!NOTE]
+> If you are looking to have an IPA repository from Github repos, check out [GithubStore](https://github.com/yazdipour/GithubStore).
+
 ## Screenshot of the repo in SideStore and LiveContainer:
 
 ![SideStore screenshot](./imgs/scrn2.png)

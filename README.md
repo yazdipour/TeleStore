@@ -9,6 +9,9 @@ No IPA files are stored in this repo. The local server reads Telegram with your 
 > [!NOTE]
 > If you are looking to have an IPA repository from Github repos, check out [GithubStore](https://github.com/yazdipour/GithubStore).
 
+> [!IMPORTANT]
+> Don't know where to find Telegram channels with IPAs? Check out [this collection](https://gist.github.com/ongkiii/b40620d8d4a98ab17642858dce4cb2ec).
+
 ## Screenshot of the repo in SideStore and LiveContainer:
 
 ![SideStore screenshot](./imgs/scrn2.png)

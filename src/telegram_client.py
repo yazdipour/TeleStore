@@ -67,6 +67,15 @@ class TelegramService:
             return data
         return None
 
+    async def download_channel_photo(self, source: SourceConfig) -> bytes | None:
+        try:
+            data = await self.client.download_profile_photo(await self.channel(source), file=bytes)
+        except Exception:
+            return None
+        if isinstance(data, bytes) and data:
+            return data
+        return None
+
     async def iter_recent_messages(self, source: SourceConfig, limit: int) -> AsyncIterator[Message]:
         async for message in self.client.iter_messages(await self.channel(source), limit=limit):
             if message and message.media:

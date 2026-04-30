@@ -33,31 +33,16 @@ telegram:
 
 server:
   base_url: http://localhost:8080
-  ui_config: false
+  ui_config: true
+  cache_seconds: 600
   ipa_cache_dir: /data/ipa-cache
   ipa_cache_workers: 4
   ipa_cache_global_workers: 8
   ipa_cache_part_size: 8388608
 
-source:
-  name: TeleStore
-  subtitle: Telegram-backed IPA source
-  description: Self-hosted AltStore source that streams IPA files from Telegram.
-  tint_color: "#1D9BF0"
-  cache_seconds: 600
-
 channels:
-  - channel: blatants
-    name: Blatants
-    slug: blatants
-    tint_color: "#1D9BF0"
-    icon: imgs/ICON-120-blue.png
-
-  - channel: dvntms
-    name: DVNTMS
-    slug: dvntms
-    tint_color: "#8B5CF6"
-    icon: imgs/ICON-120-green.png
+  - blatants
+  - dvntms
 ```
 
 4. Create `docker-compose.yml`:
@@ -96,8 +81,6 @@ http://localhost:8080/blatants.json
 http://localhost:8080/dvntms.json
 ```
 
-The legacy first-source URL still works: `http://localhost:8080/source.json`
-
 On an iPhone on the same Wi-Fi, set `server.base_url` to the reachable URL. For example, if your computer LAN IP is `192.168.1.50` and Docker maps host port `8080`:
  `http://192.168.1.50:8080/blatants.json`.
 
@@ -107,39 +90,25 @@ On an iPhone on the same Wi-Fi, set `server.base_url` to the reachable URL. For 
 
 ```yaml
 server:
+  cache_seconds: 600
   ipa_cache_dir: /data/ipa-cache
   ipa_cache_workers: 4
   ipa_cache_global_workers: 8
   ipa_cache_part_size: 8388608
 ```
 
-IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files.
+Source JSON is cached for `server.cache_seconds`. IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files.
 
-### Multiple Channels
+### Config UI
 
-Define multiple Telegram channels in `config.yml`. App generates one JSON repository per channel, served at `/{slug}.json` (e.g., `/blatants.json`).
-
-```yaml
-channels:
-  - channel: blatants
-    name: Blatants
-    slug: blatants
-    subtitle: Custom subtitle # Optional override
-    description: Custom description # Optional override
-    tint_color: "#1D9BF0"
-    icon: imgs/ICON-120-blue.png # Optional, defaults to /source-icon.png
-```
-
-### Optional Config UI
-
-The channel editor is disabled by default. To enable it, set:
+The channel editor is enabled by default. To disable editing, set:
 
 ```yaml
 server:
-  ui_config: true
+  ui_config: false
 ```
 
-Then open `http://localhost:8080/config` to add or remove channels and copy each channel source URL. New channels use the Telegram handle as the display name, a slugified lowercase handle for the URL, `#1D9BF0` as the tint color, and `imgs/ICON-120-blue.png` as the icon.
+Open `http://localhost:8080` to add or remove channels and copy each channel source URL. New channels are saved as plain strings, use the Telegram handle as the display name, use a deterministic random tint color, and use the Telegram channel photo as the icon.
 
 ![Config UI screenshot](./imgs/config.jpg)
 

@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from re import sub
 from typing import Any
@@ -8,8 +9,18 @@ from urllib.parse import urlparse
 import yaml
 
 
-SOURCE_ICON_URL = ""
-SOURCE_TINT_COLOR = "#1D9BF0"
+SOURCE_SUBTITLE = "Telegram-backed IPA source"
+SOURCE_DESCRIPTION = "Self-hosted IPA repo of Telegram channels using https://github.com/yazdipour/telestore."
+SOURCE_TINT_COLORS = (
+    "#1D9BF0",
+    "#10B981",
+    "#F59E0B",
+    "#EF4444",
+    "#8B5CF6",
+    "#EC4899",
+    "#14B8A6",
+    "#6366F1",
+)
 APP_PORT = 8080
 
 
@@ -91,10 +102,7 @@ class SourceConfig:
     channel: str
     slug: str
     name: str
-    subtitle: str
-    description: str
     tint_color: str
-    icon: str
 
 
 @dataclass(frozen=True)
@@ -105,8 +113,7 @@ class Settings:
     telegram_limit: int
     telegram_session: str
     base_url: str
-    source_icon_url: str
-    source_cache_seconds: int
+    cache_seconds: int
     host: str
     ui_config: bool
     ipa_cache_dir: str
@@ -130,8 +137,9 @@ def _dedupe_slug(slug: str, used: set[str]) -> str:
     return candidate
 
 
-def _source_value(source_data: dict, key: str) -> str:
-    return str(source_data.get(key) or "").strip()
+def _channel_tint_color(channel: str) -> str:
+    index = int(sha256(channel.encode("utf-8")).hexdigest()[:8], 16)
+    return SOURCE_TINT_COLORS[index % len(SOURCE_TINT_COLORS)]
 
 
 def _load_sources() -> tuple[SourceConfig, ...]:
@@ -139,46 +147,26 @@ def _load_sources() -> tuple[SourceConfig, ...]:
     if not isinstance(channels, list) or not channels:
         raise RuntimeError("channels must be a non-empty YAML list")
 
-    default_name = str(_setting("source.name", "TeleStore")).strip()
-    default_subtitle = str(_setting("source.subtitle", "Telegram-backed IPA source")).strip()
-    default_description = str(
-        _setting(
-            "source.description",
-            "Self-hosted AltStore source that streams IPA files from Telegram.",
-        )
-    ).strip()
-    default_tint_color = str(_setting("source.tint_color", SOURCE_TINT_COLOR)).strip()
-
     sources: list[SourceConfig] = []
     used_slugs: set[str] = set()
     for index, raw_source in enumerate(channels):
-        if isinstance(raw_source, dict):
-            source_data = raw_source
-            raw_channel = source_data.get("channel", "")
-        else:
-            source_data = {}
-            raw_channel = raw_source
+        if not isinstance(raw_source, str):
+            raise RuntimeError(f"channels[{index}] must be a string")
 
-        channel = normalize_channel(raw_channel)
+        channel = normalize_channel(raw_source)
         if not channel:
             continue
 
-        name = _source_value(source_data, "name") or (default_name if index == 0 else channel)
-        slug = _dedupe_slug(_slug(_source_value(source_data, "slug") or name), used_slugs)
-        subtitle = _source_value(source_data, "subtitle") or default_subtitle
-        description = _source_value(source_data, "description") or default_description
-        tint_color = _source_value(source_data, "tint_color") or default_tint_color
-        icon = _source_value(source_data, "icon")
+        name = channel
+        slug = _dedupe_slug(_slug(name), used_slugs)
+        tint_color = _channel_tint_color(channel)
 
         sources.append(
             SourceConfig(
                 channel=channel,
                 slug=slug,
                 name=name,
-                subtitle=subtitle,
-                description=description,
                 tint_color=tint_color,
-                icon=icon,
             )
         )
 
@@ -195,10 +183,9 @@ def load_settings() -> Settings:
         telegram_limit=int(_setting("telegram.limit", "100")),
         telegram_session=str(_setting("telegram.session", "/data/telegram.session")).strip(),
         base_url=_base_url(str(_setting("server.base_url", "http://localhost:8080"))),
-        source_icon_url=str(_setting("source.icon_url", SOURCE_ICON_URL)).strip(),
-        source_cache_seconds=int(_setting("source.cache_seconds", "600")),
+        cache_seconds=int(_setting("server.cache_seconds", "600")),
         host=str(_setting("server.host", "0.0.0.0")).strip(),
-        ui_config=_bool_setting("server.ui_config", False),
+        ui_config=_bool_setting("server.ui_config", True),
         ipa_cache_dir=str(_setting("server.ipa_cache_dir", "/data/ipa-cache")).strip(),
         ipa_cache_workers=max(int(_setting("server.ipa_cache_workers", "4")), 1),
         ipa_cache_global_workers=max(int(_setting("server.ipa_cache_global_workers", "8")), 1),

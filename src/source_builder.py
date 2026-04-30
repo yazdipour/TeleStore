@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from telethon.tl.types import Message
 
-from src.settings import Settings, SourceConfig
+from src.settings import SOURCE_DESCRIPTION, SOURCE_SUBTITLE, Settings, SourceConfig
 from src.telegram_client import TelegramService
 
 
@@ -46,14 +46,8 @@ def _app_download_url(settings: Settings, source: SourceConfig, message_id: int,
     return f"{settings.base_url}/ipa/{source.slug}/{message_id}/{quote(filename)}"
 
 
-def _icon_url(settings: Settings) -> str:
-    return settings.source_icon_url or f"{settings.base_url}/source-icon.png"
-
-
 def _source_icon_url(settings: Settings, source: SourceConfig) -> str:
-    if source.icon:
-        return f"{settings.base_url}/{source.slug}-icon.png"
-    return _icon_url(settings)
+    return f"{settings.base_url}/{source.slug}-icon.png"
 
 
 def _message_icon_url(settings: Settings, source: SourceConfig, message_id: int) -> str:
@@ -145,8 +139,8 @@ def _is_ipa_message(message: Message) -> bool:
 async def build_source(settings: Settings, source_config: SourceConfig, telegram: TelegramService) -> dict:
     source: dict = {
         "name": source_config.name,
-        "subtitle": source_config.subtitle,
-        "description": source_config.description,
+        "subtitle": SOURCE_SUBTITLE,
+        "description": SOURCE_DESCRIPTION,
         "iconURL": _source_icon_url(settings, source_config),
         "tintColor": source_config.tint_color,
         "apps": [],

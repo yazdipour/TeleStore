@@ -1,0 +1,21 @@
+<main class="app-shell">
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">TeleStore</p>
+      <h1>Channels</h1>
+    </div>
+  </header>
+  <!--STATUS-->
+  <section class="dashboard-grid">
+    <section class="panel">
+      <form class="add-channel-form" method="post" action="/config/channels">
+        <input name="channel" placeholder="Telegram channel name or URL (@blatants or https://t.me/blatants)" required>
+        <button type="submit">Add</button>
+      </form>
+    </section>
+    <section class="panel channels-panel">
+      <div class="panel-head"><h2>Channels</h2><span class="count"><!--COUNT--></span></div>
+      <!--CHANNEL_LIST-->
+    </section>
+  </section>
+</main>

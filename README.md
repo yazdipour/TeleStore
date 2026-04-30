@@ -19,10 +19,25 @@ No IPA files are stored in this repo. The local server reads Telegram with your 
 
 ## Quick Setup
 
-1. Create Telegram API credentials at https://my.telegram.org/apps.
-2. Create `config.yml`: `cp config.example.yml config.yml`
+1. Create `docker-compose.yml`:
 
-3. Edit `config.yml` and set:
+```yaml
+services:
+  app:
+    image: ghcr.io/yazdipour/telestore:latest
+    ports:
+      - "8080:8080" # if port 8080 is in use, change to another port, for example "9090:8080", and set server.base_url to http://localhost:9090
+    volumes:
+      - telegram-session:/data
+      - ./config.yml:/app/config.yml
+    restart: unless-stopped
+volumes:
+  telegram-session:
+```
+
+2. Create Telegram API credentials at https://my.telegram.org/apps.
+
+3. Create `config.yml`: `cp config.example.yml config.yml`
 
 ```yaml
 telegram:
@@ -45,24 +60,7 @@ channels:
   - dvntms
 ```
 
-4. Create `docker-compose.yml`:
-
-```yaml
-services:
-  app:
-    image: ghcr.io/yazdipour/telestore:latest
-    ports:
-      - "8080:8080" # if port 8080 is in use, change to another port, for example "9090:8080", and set server.base_url to http://localhost:9090
-    volumes:
-      - telegram-session:/data
-      - ./config.yml:/app/config.yml
-    restart: unless-stopped
-volumes:
-  telegram-session:
-```
-
-
-5. Start the server:
+4. Start the server:
 
 ```bash
 docker compose up -d

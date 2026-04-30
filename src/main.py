@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
 from src.assets import DEFAULT_ICON_PNG
 from src import settings as settings_module
-from src.settings import APP_PORT, load_settings
+from src.settings import APP_PORT, load_settings, normalize_channel
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
 
@@ -125,7 +125,7 @@ def _source_config_rows() -> list[tuple[int, object]]:
     source_index = 0
     for config_index, raw_source in enumerate(channels):
         raw_channel = raw_source.get("channel", "") if isinstance(raw_source, dict) else raw_source
-        if not str(raw_channel).strip().lstrip("@"):
+        if not normalize_channel(raw_channel):
             continue
         if source_index >= len(settings.sources):
             break
@@ -164,8 +164,8 @@ def _config_page_body(error: str = "") -> str:
         f"<ul>{''.join(rows)}</ul>"
         '<h2>Add Channel</h2>'
         '<form method="post" action="/config/channels">'
-        "<label>Telegram channel name, without @</label>"
-        '<input name="channel" placeholder="blatants" required>'
+        "<label>Telegram channel name or URL</label>"
+        '<input name="channel" placeholder="@blatants or https://t.me/blatants" required>'
         "<label>Tint color</label>"
         f'<input name="tint_color" value="{DEFAULT_SOURCE_TINT_COLOR}" required>'
         "<label>Icon path</label>"
@@ -182,7 +182,7 @@ def _slug(value: str) -> str:
 
 
 def _channel_entry(data: dict[str, str]) -> dict[str, str]:
-    channel = data.get("channel", "").strip().lstrip("@")
+    channel = normalize_channel(data.get("channel", ""))
     if not channel:
         raise ValueError("Channel is required.")
 
@@ -716,7 +716,7 @@ async def config_remove_channel(request: Request):
         configured_channels = [
             item
             for item in channels
-            if str(item.get("channel", item) if isinstance(item, dict) else item).strip().lstrip("@")
+            if normalize_channel(item.get("channel", item) if isinstance(item, dict) else item)
         ]
         if len(configured_channels) <= 1:
             raise ValueError("At least one channel must remain configured.")

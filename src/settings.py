@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from re import sub
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -75,6 +76,14 @@ def _bool_setting(path: str, default: bool = False) -> bool:
 
 def _base_url(base_url: str) -> str:
     return base_url.strip().rstrip("/")
+
+
+def normalize_channel(value: Any) -> str:
+    channel = str(value or "").strip()
+    parsed = urlparse(channel if "://" in channel else f"//{channel}")
+    if parsed.netloc.lower() in {"t.me", "www.t.me"}:
+        channel = parsed.path.strip("/").split("/", 1)[0]
+    return channel.strip().lstrip("@")
 
 
 @dataclass(frozen=True)
@@ -150,7 +159,7 @@ def _load_sources() -> tuple[SourceConfig, ...]:
             source_data = {}
             raw_channel = raw_source
 
-        channel = str(raw_channel).strip().lstrip("@")
+        channel = normalize_channel(raw_channel)
         if not channel:
             continue
 

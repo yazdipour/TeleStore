@@ -119,6 +119,13 @@ cp config.example.yml config.yml
 docker compose -f docker-compose.local.yml up --build
 ```
 
+Run tests locally from a virtualenv or other Python environment with dependencies installed:
+
+```bash
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests
+```
+
 ## AI Acknowledgment
 
 This project was built with the assistance of AI tools for code generation and refactoring.

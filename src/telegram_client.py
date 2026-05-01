@@ -47,20 +47,40 @@ class TelegramService:
             await self.client.sign_in(password=password)
         self._pending_phone = None
 
+    async def _ensure_connected(self) -> None:
+        if not self.client.is_connected():
+            await self.client.connect()
+
     async def channel(self, source: SourceConfig):
+        await self._ensure_connected()
         if source.slug not in self._channel_entities:
-            self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
+            try:
+                self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
+            except ConnectionError:
+                await self.client.connect()
+                self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
         return self._channel_entities[source.slug]
 
     async def get_message(self, source: SourceConfig, message_id: int) -> Message:
-        message = await self.client.get_messages(await self.channel(source), ids=message_id)
+        await self._ensure_connected()
+        try:
+            message = await self.client.get_messages(await self.channel(source), ids=message_id)
+        except ConnectionError:
+            await self.client.connect()
+            message = await self.client.get_messages(await self.channel(source), ids=message_id)
+
         if not message or not message.media:
             raise FileNotFoundError(f"Telegram message {message_id} has no media")
         return message
 
     async def download_thumbnail(self, message: Message) -> bytes | None:
+        await self._ensure_connected()
         try:
-            data = await self.client.download_media(message, file=bytes, thumb=-1)
+            try:
+                data = await self.client.download_media(message, file=bytes, thumb=-1)
+            except ConnectionError:
+                await self.client.connect()
+                data = await self.client.download_media(message, file=bytes, thumb=-1)
         except Exception:
             return None
         if isinstance(data, bytes) and data:
@@ -68,8 +88,13 @@ class TelegramService:
         return None
 
     async def download_channel_photo(self, source: SourceConfig) -> bytes | None:
+        await self._ensure_connected()
         try:
-            data = await self.client.download_profile_photo(await self.channel(source), file=bytes)
+            try:
+                data = await self.client.download_profile_photo(await self.channel(source), file=bytes)
+            except ConnectionError:
+                await self.client.connect()
+                data = await self.client.download_profile_photo(await self.channel(source), file=bytes)
         except Exception:
             return None
         if isinstance(data, bytes) and data:
@@ -77,9 +102,26 @@ class TelegramService:
         return None
 
     async def iter_recent_messages(self, source: SourceConfig, limit: int) -> AsyncIterator[Message]:
-        async for message in self.client.iter_messages(await self.channel(source), limit=limit):
-            if message and message.media:
-                yield message
+        await self._ensure_connected()
+        entity = await self.channel(source)
+        remaining = limit
+        offset_id = 0
+        retried = False
+
+        while remaining > 0:
+            try:
+                async for message in self.client.iter_messages(entity, limit=remaining, offset_id=offset_id):
+                    remaining -= 1
+                    if message and message.id:
+                        offset_id = int(message.id)
+                    if message and message.media:
+                        yield message
+                break
+            except ConnectionError:
+                if retried:
+                    raise
+                retried = True
+                await self.client.connect()
 
     async def stream_media(
         self,
@@ -89,18 +131,38 @@ class TelegramService:
         limit: int | None = None,
         chunk_size: int = 512 * 1024,
     ) -> AsyncIterator[bytes]:
+        await self._ensure_connected()
         sent = 0
-        async for chunk in self.client.iter_download(
-            message.media,
-            offset=offset,
-            chunk_size=chunk_size,
-            request_size=chunk_size,
-        ):
-            if limit is not None:
-                remaining = limit - sent
-                if remaining <= 0:
-                    break
-                if len(chunk) > remaining:
-                    chunk = chunk[:remaining]
-            sent += len(chunk)
-            yield chunk
+        try:
+            async for chunk in self.client.iter_download(
+                message.media,
+                offset=offset,
+                chunk_size=chunk_size,
+                request_size=chunk_size,
+            ):
+                if limit is not None:
+                    remaining = limit - sent
+                    if remaining <= 0:
+                        break
+                    if len(chunk) > remaining:
+                        chunk = chunk[:remaining]
+                sent += len(chunk)
+                offset += len(chunk)
+                yield chunk
+        except ConnectionError:
+            await self.client.connect()
+            async for chunk in self.client.iter_download(
+                message.media,
+                offset=offset,
+                chunk_size=chunk_size,
+                request_size=chunk_size,
+            ):
+                if limit is not None:
+                    remaining = limit - sent
+                    if remaining <= 0:
+                        break
+                    if len(chunk) > remaining:
+                        chunk = chunk[:remaining]
+                sent += len(chunk)
+                offset += len(chunk)
+                yield chunk

@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ class FakeTelegramClient:
     def __init__(self):
         self.connected = False
         self.connect_count = 0
+        self.disconnect_count = 0
         self.entities = {}
         self.messages = {}
         self.iter_message_calls = []
@@ -62,6 +64,10 @@ class FakeTelegramClient:
     async def connect(self):
         self.connected = True
         self.connect_count += 1
+
+    async def disconnect(self):
+        self.connected = False
+        self.disconnect_count += 1
 
     async def get_entity(self, channel):
         return self.entities[channel]
@@ -83,6 +89,7 @@ def make_service(client: FakeTelegramClient) -> TelegramService:
     service.client = client
     service._channel_entities = {}
     service._pending_phone = None
+    service._connect_lock = asyncio.Lock()
     service.settings = SimpleNamespace()
     return service
 
@@ -166,6 +173,7 @@ class TelegramServiceTests(IsolatedAsyncioTestCase):
             client.iter_download_calls,
             [("media", 100, 8, 8), ("media", 103, 8, 8)],
         )
+        self.assertEqual(client.disconnect_count, 1)
 
 
 class TestConfigImport(TestCase):

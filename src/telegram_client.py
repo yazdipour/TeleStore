@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import os
 from typing import AsyncIterator
 
@@ -18,6 +20,7 @@ class TelegramService:
         )
         self._channel_entities = {}
         self._pending_phone: str | None = None
+        self._connect_lock = asyncio.Lock()
 
     async def start(self) -> None:
         os.makedirs(os.path.dirname(self.settings.telegram_session), exist_ok=True)
@@ -48,7 +51,16 @@ class TelegramService:
         self._pending_phone = None
 
     async def _ensure_connected(self) -> None:
-        if not self.client.is_connected():
+        if self.client.is_connected():
+            return
+        async with self._connect_lock:
+            if not self.client.is_connected():
+                await self.client.connect()
+
+    async def _reconnect(self) -> None:
+        async with self._connect_lock:
+            with contextlib.suppress(Exception):
+                await self.client.disconnect()
             await self.client.connect()
 
     async def channel(self, source: SourceConfig):
@@ -57,7 +69,7 @@ class TelegramService:
             try:
                 self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
             except ConnectionError:
-                await self.client.connect()
+                await self._reconnect()
                 self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
         return self._channel_entities[source.slug]
 
@@ -66,7 +78,7 @@ class TelegramService:
         try:
             message = await self.client.get_messages(await self.channel(source), ids=message_id)
         except ConnectionError:
-            await self.client.connect()
+            await self._reconnect()
             message = await self.client.get_messages(await self.channel(source), ids=message_id)
 
         if not message or not message.media:
@@ -79,7 +91,7 @@ class TelegramService:
             try:
                 data = await self.client.download_media(message, file=bytes, thumb=-1)
             except ConnectionError:
-                await self.client.connect()
+                await self._reconnect()
                 data = await self.client.download_media(message, file=bytes, thumb=-1)
         except Exception:
             return None
@@ -93,7 +105,7 @@ class TelegramService:
             try:
                 data = await self.client.download_profile_photo(await self.channel(source), file=bytes)
             except ConnectionError:
-                await self.client.connect()
+                await self._reconnect()
                 data = await self.client.download_profile_photo(await self.channel(source), file=bytes)
         except Exception:
             return None
@@ -121,7 +133,7 @@ class TelegramService:
                 if retried:
                     raise
                 retried = True
-                await self.client.connect()
+                await self._reconnect()
 
     async def stream_media(
         self,
@@ -150,7 +162,7 @@ class TelegramService:
                 offset += len(chunk)
                 yield chunk
         except ConnectionError:
-            await self.client.connect()
+            await self._reconnect()
             async for chunk in self.client.iter_download(
                 message.media,
                 offset=offset,

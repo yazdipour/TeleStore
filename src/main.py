@@ -119,10 +119,24 @@ def _config_page_body(error: str = "", authorized: bool = False) -> str:
             "</li>"
         )
 
-    channel_list = f'<ul class="source-list">{"".join(rows)}</ul>' if rows else '<div class="empty">No channels configured.</div>'
-    
+    channel_list = (
+        f'<ul class="source-list">{"".join(rows)}</ul>'
+        if rows
+        else '<div class="empty">No channels yet. Add a Telegram channel to publish its IPAs as a source.</div>'
+    )
+    auth = (
+        '<span class="status ready">Telegram connected</span>'
+        if authorized
+        else '<a class="status pending" href="/login">Login required</a>'
+    )
+
     template = (PAGE_TEMPLATE_PATH.with_name("config.html")).read_text(encoding="utf-8")
-    return template.replace("<!--STATUS-->", status).replace("<!--COUNT-->", str(len(rows))).replace("<!--CHANNEL_LIST-->", channel_list)
+    return (
+        template.replace("<!--AUTH-->", auth)
+        .replace("<!--STATUS-->", status)
+        .replace("<!--COUNT-->", str(len(rows)))
+        .replace("<!--CHANNEL_LIST-->", channel_list)
+    )
 
 
 def _channel_entry(data: dict[str, str]) -> str:
@@ -559,8 +573,8 @@ async def home():
             f"{_source_links(include_channel=True)}"
         )
     return _html_page(
-        '<h1>Telegram Login Required</h1>'
-        '<p>Open <a href="/login"><code>/login</code></a> to save Telegram session.</p>'
+        '<h1>Connect Telegram</h1>'
+        '<p>Open <a href="/login"><code>/login</code></a> to save your Telegram session.</p>'
     )
 
 
@@ -568,15 +582,16 @@ async def home():
 async def login_page():
     if await telegram.is_authorized():
         return _html_page(
-            '<h1>Logged In</h1><p>Telegram session saved.</p>'
+            '<h1>Telegram connected</h1><p>Your session is saved. These sources are live:</p>'
             f"{_source_links()}"
         )
     return _html_page(
-        """<h1>Telegram Login</h1>
+        """<h1>Connect Telegram</h1>
+<p>TeleStore reads channels with your own account. The session stays on this server.</p>
 <form method="post" action="/login/send-code">
-  <label>Phone number with country code</label>
-  <input name="phone" placeholder="+491234567890" autocomplete="tel" required>
-  <button type="submit">Send Code</button>
+  <label>Phone number with country code
+  <input name="phone" placeholder="+491234567890" autocomplete="tel" required></label>
+  <button type="submit">Send code</button>
 </form>"""
     )
 
@@ -595,13 +610,14 @@ async def login_send_code(request: Request):
             400,
         )
     return _html_page(
-        """<h1>Enter Code</h1>
+        """<h1>Enter the code</h1>
+<p>Telegram just sent a login code to your app.</p>
 <form method="post" action="/login/verify">
-  <label>Telegram login code</label>
-  <input name="code" autocomplete="one-time-code" required>
-  <label>Two-step password, if enabled</label>
-  <input name="password" type="password" autocomplete="current-password">
-  <button type="submit">Save Session</button>
+  <label>Login code
+  <input name="code" autocomplete="one-time-code" inputmode="numeric" required></label>
+  <label>Two-step password, if enabled
+  <input name="password" type="password" autocomplete="current-password"></label>
+  <button type="submit">Verify and save</button>
 </form>"""
     )
 
@@ -617,7 +633,7 @@ async def login_verify(request: Request):
             400,
         )
     return _html_page(
-        '<h1>Login Saved</h1><p>Telegram session saved in Docker volume.</p>'
+        '<h1>Telegram connected</h1><p>Session saved. Add these sources to SideStore or AltStore:</p>'
         f"{_source_links()}"
     )
 

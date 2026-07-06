@@ -38,6 +38,7 @@ def make_settings() -> Settings:
         sources=(),
         telegram_limit=100,
         telegram_session="/tmp/session",
+        telegram_parallel_connections=8,
         base_url="https://apps.example.test",
         cache_seconds=600,
         host="0.0.0.0",

@@ -45,6 +45,7 @@ telegram:
   api_hash: your_api_hash
   session: /data/telegram.session
   limit: 100
+  parallel_connections: 8
 
 server:
   base_url: http://localhost:8080
@@ -95,7 +96,7 @@ server:
   ipa_cache_part_size: 8388608
 ```
 
-Source JSON is cached for `server.cache_seconds`. IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files.
+`telegram.parallel_connections` (default 8) opens extra Telegram connections per download so large files bypass Telegram's per-connection speed cap; set `1` to disable. Source JSON is cached for `server.cache_seconds`. IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files.
 
 ### Config UI
 

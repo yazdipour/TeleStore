@@ -7,6 +7,7 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import Message
 
+from src.parallel_download import SenderPool, try_parallel_download
 from src.settings import Settings, SourceConfig
 
 
@@ -21,6 +22,7 @@ class TelegramService:
         self._channel_entities = {}
         self._pending_phone: str | None = None
         self._connect_lock = asyncio.Lock()
+        self._sender_pool = SenderPool(self.client, settings.telegram_parallel_connections)
 
     async def start(self) -> None:
         os.makedirs(os.path.dirname(self.settings.telegram_session), exist_ok=True)
@@ -30,6 +32,7 @@ class TelegramService:
             print("Telegram login required. Open /login in browser.")
 
     async def stop(self) -> None:
+        await self._sender_pool.close()
         await self.client.disconnect()
 
     async def is_authorized(self) -> bool:
@@ -145,6 +148,29 @@ class TelegramService:
     ) -> AsyncIterator[bytes]:
         await self._ensure_connected()
         sent = 0
+
+        if limit is not None:
+            try:
+                parallel = await try_parallel_download(
+                    self.client, self._sender_pool, message.media, offset=offset, limit=limit
+                )
+            except Exception:
+                parallel = None
+            if parallel is not None:
+                failed = False
+                try:
+                    async for chunk in parallel:
+                        yield chunk
+                        sent += len(chunk)
+                except Exception:
+                    failed = True
+                if not failed or limit - sent <= 0:
+                    return
+                # Resume the remainder over the shared single connection.
+                offset += sent
+                limit -= sent
+                sent = 0
+
         try:
             async for chunk in self.client.iter_download(
                 message.media,

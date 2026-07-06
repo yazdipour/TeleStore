@@ -112,6 +112,7 @@ class Settings:
     sources: tuple[SourceConfig, ...]
     telegram_limit: int
     telegram_session: str
+    telegram_parallel_connections: int
     base_url: str
     cache_seconds: int
     host: str
@@ -182,6 +183,7 @@ def load_settings() -> Settings:
         sources=_load_sources(),
         telegram_limit=int(_setting("telegram.limit", "100")),
         telegram_session=str(_setting("telegram.session", "/data/telegram.session")).strip(),
+        telegram_parallel_connections=max(int(_setting("telegram.parallel_connections", "8")), 1),
         base_url=_base_url(str(_setting("server.base_url", "http://localhost:8080"))),
         cache_seconds=int(_setting("server.cache_seconds", "600")),
         host=str(_setting("server.host", "0.0.0.0")).strip(),

@@ -28,6 +28,7 @@ channels:
 
 _write_test_config()
 
+from src.parallel_download import SenderPool  # noqa: E402
 from src.settings import SourceConfig  # noqa: E402
 from src.telegram_client import TelegramService  # noqa: E402
 
@@ -90,6 +91,7 @@ def make_service(client: FakeTelegramClient) -> TelegramService:
     service._channel_entities = {}
     service._pending_phone = None
     service._connect_lock = asyncio.Lock()
+    service._sender_pool = SenderPool(client, 1)
     service.settings = SimpleNamespace()
     return service
 

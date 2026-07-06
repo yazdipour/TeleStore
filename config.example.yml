@@ -3,6 +3,7 @@ telegram:
   api_hash: your_api_hash
   session: /data/telegram.session
   limit: 300
+  parallel_connections: 8
 
 server:
   base_url: http://localhost:8080

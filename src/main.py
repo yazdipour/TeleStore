@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
 from src.assets import DEFAULT_ICON_PNG
 from src import settings as settings_module
-from src.settings import APP_PORT, load_settings, normalize_channel
+from src.settings import APP_PORT, display_channel, load_settings, normalize_channel
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
 
@@ -106,7 +106,7 @@ def _config_page_body(error: str = "", authorized: bool = False) -> str:
             f'<img class="source-icon" src="{escape(_source_icon_url(source))}" alt="">'
             "<div>"
             f'<div class="source-name">{escape(source.name)}</div>'
-            f'<div class="source-meta">@{escape(source.channel)}</div>'
+            f'<div class="source-meta">{escape(display_channel(source.channel))}</div>'
             f'<a class="source-url" href="{escape(url)}"><code>{escape(url)}</code></a>'
             "</div>"
             '<div class="source-actions">'
@@ -440,7 +440,9 @@ def _source_links(include_channel: bool = False) -> str:
     rows = []
     for source in settings.sources:
         url = _source_url(source)
-        channel = f'<div class="source-meta">@{escape(source.channel)}</div>' if include_channel else ""
+        channel = (
+            f'<div class="source-meta">{escape(display_channel(source.channel))}</div>' if include_channel else ""
+        )
         rows.append(
             f'<li class="source-card" style="--source-tint: {escape(source.tint_color)}">'
             f'<img class="source-icon" src="{escape(_source_icon_url(source))}" alt="">'

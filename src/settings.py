@@ -93,8 +93,37 @@ def normalize_channel(value: Any) -> str:
     channel = str(value or "").strip()
     parsed = urlparse(channel if "://" in channel else f"//{channel}")
     if parsed.netloc.lower() in {"t.me", "www.t.me"}:
-        channel = parsed.path.strip("/").split("/", 1)[0]
+        path = parsed.path.strip("/")
+        segments = path.split("/")
+        if path.startswith("joinchat/"):
+            channel = path
+        elif segments[0] == "c" and len(segments) >= 2 and segments[1].isdigit():
+            channel = f"c/{segments[1]}"
+        else:
+            channel = segments[0]
     return channel.strip().lstrip("@")
+
+
+def is_invite_channel(channel: str) -> bool:
+    return channel.startswith("+") or channel.startswith("joinchat/")
+
+
+def is_private_id_channel(channel: str) -> bool:
+    return channel.startswith("c/")
+
+
+def telethon_channel_ref(channel: str) -> str | int:
+    if is_invite_channel(channel):
+        return f"https://t.me/{channel}"
+    if is_private_id_channel(channel):
+        return int(f"-100{channel[2:]}")
+    return channel
+
+
+def display_channel(channel: str) -> str:
+    if is_invite_channel(channel) or is_private_id_channel(channel):
+        return channel
+    return f"@{channel}"
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import Message
 
 from src.parallel_download import SenderPool, try_parallel_download
-from src.settings import Settings, SourceConfig
+from src.settings import Settings, SourceConfig, telethon_channel_ref
 
 
 class TelegramService:
@@ -69,11 +69,12 @@ class TelegramService:
     async def channel(self, source: SourceConfig):
         await self._ensure_connected()
         if source.slug not in self._channel_entities:
+            channel_ref = telethon_channel_ref(source.channel)
             try:
-                self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
+                self._channel_entities[source.slug] = await self.client.get_entity(channel_ref)
             except ConnectionError:
                 await self._reconnect()
-                self._channel_entities[source.slug] = await self.client.get_entity(source.channel)
+                self._channel_entities[source.slug] = await self.client.get_entity(channel_ref)
         return self._channel_entities[source.slug]
 
     async def get_message(self, source: SourceConfig, message_id: int) -> Message:

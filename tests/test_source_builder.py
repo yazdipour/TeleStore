@@ -47,6 +47,7 @@ def make_settings() -> Settings:
         ipa_cache_workers=4,
         ipa_cache_global_workers=8,
         ipa_cache_part_size=8 * 1024 * 1024,
+        ipa_cache_max_bytes=1024 * 1024 * 1024,
     )
 
 

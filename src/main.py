@@ -321,6 +321,27 @@ async def _download_cache_file(message, temp_path: Path, expected_size: int) -> 
     await _download_cache_parallel(message, temp_path, expected_size)
 
 
+def _sweep_ipa_cache_once(incoming_bytes: int = 0) -> None:
+    if not settings.ipa_cache_dir or settings.ipa_cache_max_bytes <= 0:
+        return
+    cache_dir = Path(settings.ipa_cache_dir)
+    if not cache_dir.is_dir():
+        return
+    target_limit = max(settings.ipa_cache_max_bytes - incoming_bytes, 0)
+    files = sorted(
+        (entry for entry in cache_dir.iterdir() if entry.is_file() and not entry.name.startswith(".")),
+        key=lambda entry: entry.stat().st_mtime,
+    )
+    total = sum(entry.stat().st_size for entry in files)
+    for entry in files:
+        if total <= target_limit:
+            break
+        size = entry.stat().st_size
+        entry.unlink(missing_ok=True)
+        total -= size
+        logger.info("IPA cache evicted %s (%d bytes) to stay under limit", entry.name, size)
+
+
 async def _ensure_ipa_cached(message, cache_path: Path, expected_size: int) -> None:
     async with _cache_lock(cache_path):
         if _valid_cached_file(cache_path, expected_size):
@@ -329,6 +350,7 @@ async def _ensure_ipa_cached(message, cache_path: Path, expected_size: int) -> N
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = cache_path.with_name(f".{cache_path.name}.tmp")
         try:
+            _sweep_ipa_cache_once(incoming_bytes=expected_size)
             await _download_cache_file(message, temp_path, expected_size)
             temp_path.replace(cache_path)
         except Exception:
@@ -343,6 +365,7 @@ async def _stream_ipa_with_cache(message, cache_path: Path, expected_size: int):
                 yield chunk
             return
 
+        _sweep_ipa_cache_once(incoming_bytes=expected_size)
         handle = None
         temp_path = cache_path.with_name(f".{cache_path.name}.tmp")
         written = 0

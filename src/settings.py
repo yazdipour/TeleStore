@@ -150,6 +150,7 @@ class Settings:
     ipa_cache_workers: int
     ipa_cache_global_workers: int
     ipa_cache_part_size: int
+    ipa_cache_max_bytes: int
 
 
 def _slug(value: str) -> str:
@@ -221,4 +222,5 @@ def load_settings() -> Settings:
         ipa_cache_workers=max(int(_setting("server.ipa_cache_workers", "4")), 1),
         ipa_cache_global_workers=max(int(_setting("server.ipa_cache_global_workers", "8")), 1),
         ipa_cache_part_size=max(int(_setting("server.ipa_cache_part_size", str(8 * 1024 * 1024))), 512 * 1024),
+        ipa_cache_max_bytes=max(int(_setting("server.ipa_cache_max_mb", "1024")), 0) * 1024 * 1024,
     )

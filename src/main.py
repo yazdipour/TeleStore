@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from copy import deepcopy
 from email.utils import formatdate
+from hashlib import sha256
 from html import escape
 import json
 import logging
@@ -20,7 +21,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from src import __version__ as APP_VERSION
 from src.assets import DEFAULT_ICON_PNG
 from src import settings as settings_module
-from src.settings import APP_PORT, display_channel, load_settings, normalize_channel
+from src.settings import APP_PORT, channel_identity, display_channel, load_settings, normalize_channel
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
 
@@ -30,7 +31,10 @@ telegram = TelegramService(settings)
 source_caches: dict[str, dict[str, object]] = {
     source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources
 }
+# Icon state is keyed by normalized channel, so it survives config reloads safely.
 source_icon_caches: dict[str, bytes] = {}
+source_icon_locks: dict[str, asyncio.Lock] = {}
+source_icon_retry_after: dict[str, float] = {}
 ipa_cache_locks: dict[str, asyncio.Lock] = {}
 ipa_cache_lock_refs: dict[str, int] = {}
 ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
@@ -59,15 +63,19 @@ async def _form(request: Request) -> dict[str, str]:
 
 
 def _runtime_refresh() -> None:
-    global settings, source_caches, source_icon_caches, sources_by_slug, ipa_cache_global_semaphore
+    global settings, source_caches, sources_by_slug, ipa_cache_global_semaphore
     settings_module.reload_config()
     settings = load_settings()
     telegram.settings = settings
     telegram._channel_entities.clear()
     source_caches = {source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources}
-    source_icon_caches = {}
+    configured = {source.channel for source in settings.sources}
+    for icon_state in (source_icon_caches, source_icon_retry_after):
+        for channel in [key for key in icon_state if key not in configured]:
+            icon_state.pop(channel, None)
     sources_by_slug = {source.slug: source for source in settings.sources}
     ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
+    _prune_icon_cache()
 
 
 def _config_ui_enabled() -> None:
@@ -80,11 +88,15 @@ def _source_config_rows() -> list[tuple[int, object]]:
     if not isinstance(channels, list):
         return []
 
+    # Mirrors _load_sources: skips empty entries and repeats of an earlier channel.
     rows = []
     source_index = 0
+    seen: set[str] = set()
     for config_index, raw_source in enumerate(channels):
-        if not isinstance(raw_source, str) or not normalize_channel(raw_source):
+        channel = normalize_channel(raw_source) if isinstance(raw_source, str) else ""
+        if not channel or channel_identity(channel) in seen:
             continue
+        seen.add(channel_identity(channel))
         if source_index >= len(settings.sources):
             break
         rows.append((config_index, settings.sources[source_index]))
@@ -435,11 +447,42 @@ def _icon_response(icon: bytes, request: Request) -> Response:
     return Response(content=icon, media_type=media_type, headers=headers)
 
 
-def _icon_cache_path(source_slug: str) -> Path | None:
+ICON_CACHE_SUFFIX = ".img"
+ICON_RETRY_SECONDS = 300.0
+ICON_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _icon_cache_key(channel: str) -> str:
+    # Keyed by channel identity, not slug: a slug can be reassigned to another
+    # channel when the config changes, and must never inherit the old icon.
+    return sha256(channel_identity(channel).encode("utf-8")).hexdigest()[:32]
+
+
+def _icon_cache_path(channel: str) -> Path | None:
     if not settings.icon_cache_dir:
         return None
-    # Slugs are sanitised in settings to [A-Za-z0-9_-], so they are safe as filenames.
-    return Path(settings.icon_cache_dir) / f"{source_slug}.img"
+    return Path(settings.icon_cache_dir) / f"{_icon_cache_key(channel)}{ICON_CACHE_SUFFIX}"
+
+
+def _prune_icon_cache() -> None:
+    # Bounds the disk cache to one file per configured channel by removing
+    # icons of channels that are no longer configured.
+    if not settings.icon_cache_dir:
+        return
+    cache_dir = Path(settings.icon_cache_dir)
+    keep = {f"{_icon_cache_key(source.channel)}{ICON_CACHE_SUFFIX}" for source in settings.sources}
+    try:
+        entries = list(cache_dir.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name in keep:
+            continue
+        try:
+            if entry.is_file():
+                entry.unlink()
+        except OSError as exc:
+            logger.warning("Channel icon cache prune failed for %s: %s", entry.name, exc)
 
 
 def _read_icon_cache(path: Path | None) -> bytes | None:
@@ -463,27 +506,58 @@ def _write_icon_cache(path: Path | None, icon: bytes) -> None:
         temp_path.replace(path)
     except OSError as exc:
         logger.warning("Channel icon cache write failed for %s: %s", path.name, exc)
-        temp_path.unlink(missing_ok=True)
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _cached_channel_icon(channel: str) -> bytes | None:
+    cached = source_icon_caches.get(channel)
+    if isinstance(cached, bytes):
+        return cached
+    from_disk = _read_icon_cache(_icon_cache_path(channel))
+    if from_disk:
+        source_icon_caches[channel] = from_disk
+    return from_disk
+
+
+def _channel_still_configured(channel: str) -> bool:
+    return any(source.channel == channel for source in settings.sources)
 
 
 async def _source_channel_icon(source) -> bytes | None:
-    # Icons are fetched once and kept forever (memory, then disk). Only successful
-    # fetches are stored, so a failed attempt is retried on the next request.
-    cached = source_icon_caches.get(source.slug)
-    if isinstance(cached, bytes):
+    # Icons are fetched once and kept (memory, then disk), keyed by channel.
+    # A failed fetch is retried only after ICON_RETRY_SECONDS.
+    channel = source.channel
+    cached = _cached_channel_icon(channel)
+    if cached:
         return cached
-    path = _icon_cache_path(source.slug)
-    from_disk = _read_icon_cache(path)
-    if from_disk:
-        source_icon_caches[source.slug] = from_disk
-        return from_disk
-    if not await telegram.is_authorized():
+    if monotonic() < source_icon_retry_after.get(channel, 0.0):
         return None
-    icon = await telegram.download_channel_photo(source)
-    if icon:
-        source_icon_caches[source.slug] = icon
-        _write_icon_cache(path, icon)
-    return icon
+
+    lock = source_icon_locks.setdefault(channel, asyncio.Lock())
+    async with lock:
+        # Another request may have fetched it while this one waited.
+        cached = _cached_channel_icon(channel)
+        if cached:
+            return cached
+        if monotonic() < source_icon_retry_after.get(channel, 0.0):
+            return None
+        if not await telegram.is_authorized():
+            return None
+
+        icon = await telegram.download_channel_photo(source)
+        if not icon or len(icon) > ICON_MAX_BYTES:
+            source_icon_retry_after[channel] = monotonic() + ICON_RETRY_SECONDS
+            return None
+
+        source_icon_retry_after.pop(channel, None)
+        # The config may have dropped this channel while Telegram was answering.
+        if _channel_still_configured(channel):
+            source_icon_caches[channel] = icon
+            _write_icon_cache(_icon_cache_path(channel), icon)
+        return icon
 
 
 def _source_url(source) -> str:
@@ -517,6 +591,7 @@ def _source_links(include_channel: bool = False) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _prune_icon_cache()
     await telegram.start()
     if await telegram.is_authorized():
         for source in settings.sources:
@@ -726,6 +801,8 @@ async def config_add_channel(request: Request):
             channels = []
         else:
             channels = list(channels)
+        if any(channel_identity(source.channel) == channel_identity(entry) for source in settings.sources):
+            raise ValueError(f"{display_channel(entry)} is already configured.")
         channels.append(entry)
         _save_channels(channels)
     except Exception as exc:

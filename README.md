@@ -56,7 +56,7 @@ server:
   ipa_cache_global_workers: 8
   ipa_cache_part_size: 8388608
   ipa_cache_max_mb: 1024
-icon_cache_dir: /data/icon-cache
+  icon_cache_dir: /data/icon-cache
 
 channels:
   - blatants
@@ -97,10 +97,10 @@ server:
   ipa_cache_global_workers: 8
   ipa_cache_part_size: 8388608
   ipa_cache_max_mb: 1024
-icon_cache_dir: /data/icon-cache
+  icon_cache_dir: /data/icon-cache
 ```
 
-`telegram.parallel_connections` (default 8) opens extra Telegram connections per download so large files bypass Telegram's per-connection speed cap; set `1` to disable. Source JSON is cached for `server.cache_seconds`. IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files. `server.ipa_cache_max_mb` (default 1024 MB, `0` disables) caps total cache disk usage; whenever a new file is cached, older files are automatically deleted until usage is under the limit. Channel icons are fetched once and saved under `server.icon_cache_dir` (default `/data/icon-cache`, empty disables disk storage); they are never refreshed. Failed fetches are not saved and are retried on the next request.
+`telegram.parallel_connections` (default 8) opens extra Telegram connections per download so large files bypass Telegram's per-connection speed cap; set `1` to disable. Source JSON is cached for `server.cache_seconds`. IPA downloads are cached under `server.ipa_cache_dir` after the first request. Range requests then serve from local disk instead of re-fetching the same bytes from Telegram. On cold range requests, `server.ipa_cache_workers` downloads cache parts concurrently using `server.ipa_cache_part_size` byte chunks. `server.ipa_cache_global_workers` caps total Telegram cache downloads across files. `server.ipa_cache_max_mb` (default 1024 MB, `0` disables) caps total cache disk usage; whenever a new file is cached, older files are automatically deleted until usage is under the limit. Channel icons are fetched once and saved under `server.icon_cache_dir` (default `/data/icon-cache`, empty disables disk storage); they are never refreshed. Icons are stored per channel, and icons of channels removed from the config are deleted, so the cache holds at most one file per configured channel. Failed fetches are not saved and are retried after 5 minutes.
 
 ### Config UI
 

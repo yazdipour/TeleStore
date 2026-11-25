@@ -122,7 +122,17 @@ def telethon_channel_ref(channel: str) -> str | int:
 
 def channel_identity(channel: str) -> str:
     # Usernames and numeric ids are case-insensitive; invite hashes are not.
-    return channel if is_invite_channel(channel) else channel.lower()
+    # "+<hash>" and "joinchat/<hash>" are the same invite.
+    if channel.startswith("joinchat/"):
+        return f"+{channel.removeprefix('joinchat/')}"
+    if is_invite_channel(channel):
+        return channel
+    return channel.lower()
+
+
+def channel_key(channel: str) -> str:
+    # Stable, filename- and URL-safe digest of a channel's identity.
+    return sha256(channel_identity(channel).encode("utf-8")).hexdigest()
 
 
 def display_channel(channel: str) -> str:

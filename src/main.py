@@ -29,9 +29,7 @@ telegram = TelegramService(settings)
 source_caches: dict[str, dict[str, object]] = {
     source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources
 }
-source_icon_caches: dict[str, dict[str, object]] = {
-    source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources
-}
+source_icon_caches: dict[str, bytes] = {}
 ipa_cache_locks: dict[str, asyncio.Lock] = {}
 ipa_cache_lock_refs: dict[str, int] = {}
 ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
@@ -66,7 +64,7 @@ def _runtime_refresh() -> None:
     telegram.settings = settings
     telegram._channel_entities.clear()
     source_caches = {source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources}
-    source_icon_caches = {source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources}
+    source_icon_caches = {}
     sources_by_slug = {source.slug: source for source in settings.sources}
     ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
 
@@ -436,18 +434,54 @@ def _icon_response(icon: bytes, request: Request) -> Response:
     return Response(content=icon, media_type=media_type, headers=headers)
 
 
+def _icon_cache_path(source_slug: str) -> Path | None:
+    if not settings.icon_cache_dir:
+        return None
+    # Slugs are sanitised in settings to [A-Za-z0-9_-], so they are safe as filenames.
+    return Path(settings.icon_cache_dir) / f"{source_slug}.img"
+
+
+def _read_icon_cache(path: Path | None) -> bytes | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        logger.warning("Channel icon cache read failed for %s: %s", path.name, exc)
+        return None
+    return data or None
+
+
+def _write_icon_cache(path: Path | None, icon: bytes) -> None:
+    if path is None:
+        return
+    temp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.write_bytes(icon)
+        temp_path.replace(path)
+    except OSError as exc:
+        logger.warning("Channel icon cache write failed for %s: %s", path.name, exc)
+        temp_path.unlink(missing_ok=True)
+
+
 async def _source_channel_icon(source) -> bytes | None:
-    cache = source_icon_caches.setdefault(source.slug, {"expires_at": 0.0, "value": None})
-    now = monotonic()
-    if float(cache["expires_at"]) > now:
-        value = cache["value"]
-        return value if isinstance(value, bytes) else None
-    icon = None
+    # Icons are fetched once and kept forever (memory, then disk). Only successful
+    # fetches are stored, so a failed attempt is retried on the next request.
+    cached = source_icon_caches.get(source.slug)
+    if isinstance(cached, bytes):
+        return cached
+    path = _icon_cache_path(source.slug)
+    from_disk = _read_icon_cache(path)
+    if from_disk:
+        source_icon_caches[source.slug] = from_disk
+        return from_disk
     if not await telegram.is_authorized():
         return None
     icon = await telegram.download_channel_photo(source)
-    cache["value"] = icon
-    cache["expires_at"] = now + 86400
+    if icon:
+        source_icon_caches[source.slug] = icon
+        _write_icon_cache(path, icon)
     return icon
 
 

@@ -12,6 +12,9 @@ COPY src ./src
 COPY imgs/ICON-120-blue.png ./imgs/ICON-120-blue.png
 COPY imgs/ICON-120-green.png ./imgs/ICON-120-green.png
 
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 EXPOSE 8080
 
 CMD ["python", "-m", "src.main"]

@@ -120,6 +120,21 @@ def telethon_channel_ref(channel: str) -> str | int:
     return channel
 
 
+def channel_identity(channel: str) -> str:
+    # Usernames and numeric ids are case-insensitive; invite hashes are not.
+    # "+<hash>" and "joinchat/<hash>" are the same invite.
+    if channel.startswith("joinchat/"):
+        return f"+{channel.removeprefix('joinchat/')}"
+    if is_invite_channel(channel):
+        return channel
+    return channel.lower()
+
+
+def channel_key(channel: str) -> str:
+    # Stable, filename- and URL-safe digest of a channel's identity.
+    return sha256(channel_identity(channel).encode("utf-8")).hexdigest()
+
+
 def display_channel(channel: str) -> str:
     if is_invite_channel(channel) or is_private_id_channel(channel):
         return channel
@@ -181,13 +196,15 @@ def _load_sources() -> tuple[SourceConfig, ...]:
 
     sources: list[SourceConfig] = []
     used_slugs: set[str] = set()
+    seen_channels: set[str] = set()
     for index, raw_source in enumerate(channels):
         if not isinstance(raw_source, str):
             raise RuntimeError(f"channels[{index}] must be a string")
 
         channel = normalize_channel(raw_source)
-        if not channel:
+        if not channel or channel_identity(channel) in seen_channels:
             continue
+        seen_channels.add(channel_identity(channel))
 
         name = channel
         slug = _dedupe_slug(_slug(name), used_slugs)

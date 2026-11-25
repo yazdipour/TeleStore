@@ -6,6 +6,7 @@ from html import escape
 import json
 import logging
 from pathlib import Path
+from re import compile as re_compile
 from re import sub
 from time import monotonic
 from urllib.parse import parse_qs
@@ -20,7 +21,14 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from src import __version__ as APP_VERSION
 from src.assets import DEFAULT_ICON_PNG
 from src import settings as settings_module
-from src.settings import APP_PORT, display_channel, load_settings, normalize_channel
+from src.settings import (
+    APP_PORT,
+    channel_identity,
+    channel_key,
+    display_channel,
+    load_settings,
+    normalize_channel,
+)
 from src.source_builder import build_source
 from src.telegram_client import TelegramService
 
@@ -30,7 +38,10 @@ telegram = TelegramService(settings)
 source_caches: dict[str, dict[str, object]] = {
     source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources
 }
+# Icon state is keyed by _icon_key(channel), so it survives config reloads safely.
 source_icon_caches: dict[str, bytes] = {}
+source_icon_locks: dict[str, asyncio.Lock] = {}
+source_icon_retry_after: dict[str, float] = {}
 ipa_cache_locks: dict[str, asyncio.Lock] = {}
 ipa_cache_lock_refs: dict[str, int] = {}
 ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
@@ -59,15 +70,21 @@ async def _form(request: Request) -> dict[str, str]:
 
 
 def _runtime_refresh() -> None:
-    global settings, source_caches, source_icon_caches, sources_by_slug, ipa_cache_global_semaphore
+    global settings, source_caches, sources_by_slug, ipa_cache_global_semaphore
     settings_module.reload_config()
     settings = load_settings()
     telegram.settings = settings
     telegram._channel_entities.clear()
     source_caches = {source.slug: {"expires_at": 0.0, "value": None} for source in settings.sources}
-    source_icon_caches = {}
+    configured = {_icon_key(source.channel) for source in settings.sources}
+    for icon_state in (source_icon_caches, source_icon_retry_after):
+        for key in [key for key in icon_state if key not in configured]:
+            icon_state.pop(key, None)
+    for key in [key for key, lock in source_icon_locks.items() if key not in configured and not lock.locked()]:
+        source_icon_locks.pop(key, None)
     sources_by_slug = {source.slug: source for source in settings.sources}
     ipa_cache_global_semaphore = asyncio.Semaphore(settings.ipa_cache_global_workers)
+    _prune_icon_cache()
 
 
 def _config_ui_enabled() -> None:
@@ -80,11 +97,15 @@ def _source_config_rows() -> list[tuple[int, object]]:
     if not isinstance(channels, list):
         return []
 
+    # Mirrors _load_sources: skips empty entries and repeats of an earlier channel.
     rows = []
     source_index = 0
+    seen: set[str] = set()
     for config_index, raw_source in enumerate(channels):
-        if not isinstance(raw_source, str) or not normalize_channel(raw_source):
+        channel = normalize_channel(raw_source) if isinstance(raw_source, str) else ""
+        if not channel or channel_identity(channel) in seen:
             continue
+        seen.add(channel_identity(channel))
         if source_index >= len(settings.sources):
             break
         rows.append((config_index, settings.sources[source_index]))
@@ -435,11 +456,50 @@ def _icon_response(icon: bytes, request: Request) -> Response:
     return Response(content=icon, media_type=media_type, headers=headers)
 
 
-def _icon_cache_path(source_slug: str) -> Path | None:
+ICON_CACHE_SUFFIX = ".img"
+ICON_RETRY_SECONDS = 300.0
+ICON_MAX_BYTES = 2 * 1024 * 1024
+# Only files with these names are ever pruned: current channel-keyed icons,
+# legacy slug-named icons, and their leftover temp files. Anything else in the
+# directory (e.g. a shared /data holding telegram.session) is left alone.
+_ICON_CACHE_FILE = re_compile(r"^\.?[A-Za-z0-9_-]+\.img(\.tmp)?$")
+
+
+def _icon_key(channel: str) -> str:
+    # Icon state is keyed by channel identity, not slug: a slug can be reassigned
+    # to another channel when the config changes, and must never inherit its icon.
+    return channel_key(channel)[:32]
+
+
+def _icon_cache_path(channel: str) -> Path | None:
     if not settings.icon_cache_dir:
         return None
-    # Slugs are sanitised in settings to [A-Za-z0-9_-], so they are safe as filenames.
-    return Path(settings.icon_cache_dir) / f"{source_slug}.img"
+    return Path(settings.icon_cache_dir) / f"{_icon_key(channel)}{ICON_CACHE_SUFFIX}"
+
+
+def _prune_icon_cache() -> None:
+    # Bounds the disk cache to one file per configured channel by removing
+    # icon files of channels that are no longer configured. Runs on startup and
+    # on every config change, so a failed run is retried on the next one.
+    if not settings.icon_cache_dir:
+        return
+    cache_dir = Path(settings.icon_cache_dir)
+    keep = {f"{_icon_key(source.channel)}{ICON_CACHE_SUFFIX}" for source in settings.sources}
+    try:
+        entries = list(cache_dir.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning("Channel icon cache prune skipped, cannot list %s: %s", cache_dir, exc)
+        return
+    for entry in entries:
+        if entry.name in keep or not _ICON_CACHE_FILE.match(entry.name):
+            continue
+        try:
+            if entry.is_file():
+                entry.unlink()
+        except OSError as exc:
+            logger.warning("Channel icon cache prune failed for %s: %s", entry.name, exc)
 
 
 def _read_icon_cache(path: Path | None) -> bytes | None:
@@ -463,27 +523,72 @@ def _write_icon_cache(path: Path | None, icon: bytes) -> None:
         temp_path.replace(path)
     except OSError as exc:
         logger.warning("Channel icon cache write failed for %s: %s", path.name, exc)
-        temp_path.unlink(missing_ok=True)
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _cached_channel_icon(channel: str) -> bytes | None:
+    key = _icon_key(channel)
+    cached = source_icon_caches.get(key)
+    if isinstance(cached, bytes):
+        return cached
+    from_disk = _read_icon_cache(_icon_cache_path(channel))
+    if from_disk:
+        source_icon_caches[key] = from_disk
+    return from_disk
+
+
+def _source_still_current(source) -> bool:
+    # True when the slug still belongs to the same channel after any config reload.
+    current = sources_by_slug.get(source.slug)
+    return current is not None and channel_identity(current.channel) == channel_identity(source.channel)
+
+
+async def _download_channel_icon(source) -> bytes | None:
+    try:
+        icon = await telegram.download_channel_photo(source)
+    except Exception as exc:
+        logger.warning("Channel icon download failed for %s: %s", source.slug, exc)
+        return None
+    return icon if icon and len(icon) <= ICON_MAX_BYTES else None
 
 
 async def _source_channel_icon(source) -> bytes | None:
-    # Icons are fetched once and kept forever (memory, then disk). Only successful
-    # fetches are stored, so a failed attempt is retried on the next request.
-    cached = source_icon_caches.get(source.slug)
-    if isinstance(cached, bytes):
+    # Icons are fetched once and kept (memory, then disk), keyed by channel.
+    # A failed fetch is retried only after ICON_RETRY_SECONDS.
+    key = _icon_key(source.channel)
+    cached = _cached_channel_icon(source.channel)
+    if cached:
         return cached
-    path = _icon_cache_path(source.slug)
-    from_disk = _read_icon_cache(path)
-    if from_disk:
-        source_icon_caches[source.slug] = from_disk
-        return from_disk
-    if not await telegram.is_authorized():
+    if monotonic() < source_icon_retry_after.get(key, 0.0):
         return None
-    icon = await telegram.download_channel_photo(source)
-    if icon:
-        source_icon_caches[source.slug] = icon
-        _write_icon_cache(path, icon)
-    return icon
+
+    lock = source_icon_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        # Another request may have fetched it while this one waited.
+        cached = _cached_channel_icon(source.channel)
+        if cached:
+            return cached
+        if monotonic() < source_icon_retry_after.get(key, 0.0):
+            return None
+        if not await telegram.is_authorized():
+            return None
+
+        icon = await _download_channel_icon(source)
+        # The config may have changed while Telegram was answering. If this
+        # channel no longer owns the slug, record nothing and serve the fallback.
+        if not _source_still_current(source):
+            return None
+        if icon is None:
+            source_icon_retry_after[key] = monotonic() + ICON_RETRY_SECONDS
+            return None
+
+        source_icon_retry_after.pop(key, None)
+        source_icon_caches[key] = icon
+        _write_icon_cache(_icon_cache_path(source.channel), icon)
+        return icon
 
 
 def _source_url(source) -> str:
@@ -491,7 +596,9 @@ def _source_url(source) -> str:
 
 
 def _source_icon_url(source) -> str:
-    return f"{settings.base_url}/{source.slug}-icon.png"
+    # Versioned by channel so browsers drop a publicly cached icon when the
+    # slug is reassigned to another channel.
+    return f"{settings.base_url}/{source.slug}-icon.png?v={channel_key(source.channel)[:12]}"
 
 
 def _source_links(include_channel: bool = False) -> str:
@@ -517,6 +624,7 @@ def _source_links(include_channel: bool = False) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _prune_icon_cache()
     await telegram.start()
     if await telegram.is_authorized():
         for source in settings.sources:
@@ -726,6 +834,8 @@ async def config_add_channel(request: Request):
             channels = []
         else:
             channels = list(channels)
+        if any(channel_identity(source.channel) == channel_identity(entry) for source in settings.sources):
+            raise ValueError(f"{display_channel(entry)} is already configured.")
         channels.append(entry)
         _save_channels(channels)
     except Exception as exc:
@@ -743,17 +853,17 @@ async def config_remove_channel(request: Request):
         channels = settings_module.CONFIG.get("channels")
         if not isinstance(channels, list):
             raise ValueError("channels must be a YAML list.")
-        configured_channels = [
-            item
-            for item in channels
-            if isinstance(item, str) and normalize_channel(item)
-        ]
-        if len(configured_channels) <= 1:
+        def identity(item) -> str:
+            channel = normalize_channel(item) if isinstance(item, str) else ""
+            return channel_identity(channel) if channel else ""
+
+        removed = identity(channels[index])
+        if not removed:
+            raise ValueError("Unknown channel.")
+        if len({identity(item) for item in channels} - {"", removed}) < 1:
             raise ValueError("At least one channel must remain configured.")
-        removed = channels[index]
-        next_channels = list(channels)
-        del next_channels[index]
-        _save_channels(next_channels)
+        # Drop every entry for this channel, so a duplicated one goes away in one click.
+        _save_channels([item for item in channels if identity(item) != removed])
     except Exception as exc:
         return _html_page(_config_page_body(error=str(exc), authorized=await telegram.is_authorized()), 400)
 

@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from telethon.tl.types import Message
 
-from src.settings import SOURCE_DESCRIPTION, SOURCE_SUBTITLE, Settings, SourceConfig
+from src.settings import SOURCE_DESCRIPTION, SOURCE_SUBTITLE, Settings, SourceConfig, channel_key
 from src.telegram_client import TelegramService
 
 
@@ -47,7 +47,9 @@ def _app_download_url(settings: Settings, source: SourceConfig, message_id: int,
 
 
 def _source_icon_url(settings: Settings, source: SourceConfig) -> str:
-    return f"{settings.base_url}/{source.slug}-icon.png"
+    # The version changes when a slug is reassigned to another channel, so
+    # clients holding the old (publicly cached) icon fetch the new one.
+    return f"{settings.base_url}/{source.slug}-icon.png?v={channel_key(source.channel)[:12]}"
 
 
 def _message_icon_url(settings: Settings, source: SourceConfig, message_id: int) -> str:

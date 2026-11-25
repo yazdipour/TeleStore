@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
+from src import __version__ as APP_VERSION
 from src.assets import DEFAULT_ICON_PNG
 from src import settings as settings_module
 from src.settings import APP_PORT, display_channel, load_settings, normalize_channel
@@ -621,19 +622,30 @@ async def telegram_icon(source_slug: str, message_id: int, request: Request):
     return Response(content=thumbnail, media_type=media_type, headers=headers)
 
 
+def _app_footer() -> str:
+    return (
+        '<footer class="app-footer">'
+        f"<span>TeleStore {escape(f'v{APP_VERSION}' if APP_VERSION[:1].isdigit() else APP_VERSION)}</span>"
+        '<a href="https://github.com/yazdipour/telestore" target="_blank" rel="noopener">GitHub</a>'
+        "</footer>"
+    )
+
+
 @app.get("/")
 async def home():
     if settings.ui_config:
-        return _html_page(_config_page_body(authorized=await telegram.is_authorized()))
+        return _html_page(_config_page_body(authorized=await telegram.is_authorized()) + _app_footer())
     if await telegram.is_authorized():
         return _html_page(
             '<h1><a href="https://github.com/yazdipour/telestore">TeleStore</a></h1>'
             '<p>Telegram login ready.</p>'
             f"{_source_links(include_channel=True)}"
+            f"{_app_footer()}"
         )
     return _html_page(
         '<h1>Connect Telegram</h1>'
         '<p>Open <a href="/login"><code>/login</code></a> to save your Telegram session.</p>'
+        f"{_app_footer()}"
     )
 
 

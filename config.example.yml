@@ -15,6 +15,7 @@ server:
   ipa_cache_global_workers: 8
   ipa_cache_part_size: 8388608
   ipa_cache_max_mb: 1024
+  icon_cache_dir: /data/icon-cache
 
 channels:
 - blatants
